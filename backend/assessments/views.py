@@ -4,7 +4,7 @@ from rest_framework import viewsets, permissions, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from courses.models import Course
-from .defaults import ensure_sheet_blocks
+from .defaults import ensure_lab_blocks, ensure_sheet_blocks
 from .models import Assessment, Student, StudentMark, GradeBand
 from .serializers import (
     AssessmentSerializer, StudentSerializer, StudentMarkSerializer, GradeBandSerializer,
@@ -39,8 +39,13 @@ class AssessmentViewSet(viewsets.ModelViewSet):
             return Response({'error': 'Course not found.'}, status=404)
         if request.user.is_faculty_role and course.faculty_id != request.user.id:
             return Response({'error': 'Not allowed.'}, status=403)
-        created = ensure_sheet_blocks(course)
-        assessments = Assessment.objects.filter(course=course, assessment_type__in=['T1', 'T2', 'T3', 'TA', 'FEEDBACK'])
+        if getattr(course, 'is_lab', False) or getattr(course, 'course_kind', '') == 'LAB':
+            created = ensure_lab_blocks(course)
+            types = ['MID', 'END', 'D2D']
+        else:
+            created = ensure_sheet_blocks(course)
+            types = ['T1', 'T2', 'T3', 'TA', 'FEEDBACK']
+        assessments = Assessment.objects.filter(course=course, assessment_type__in=types)
         return Response({
             'created': created,
             'assessments': AssessmentSerializer(assessments, many=True).data,
@@ -87,7 +92,131 @@ class StudentViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         qs = faculty_scope(self.request.user, super().get_queryset())
         course_id = self.request.query_params.get('course')
-        return qs.filter(course_id=course_id).order_by('roll_number') if course_id else qs.order_by('roll_number')
+        qs = qs.filter(course_id=course_id) if course_id else qs
+        return qs.order_by('sort_order', 'id')
+
+    def perform_create(self, serializer):
+        course = serializer.validated_data['course']
+        if 'sort_order' not in getattr(self.request, 'data', {}):
+            mx = Student.objects.filter(course=course).aggregate(m=Max('sort_order'))['m']
+            serializer.save(sort_order=(mx if mx is not None else -1) + 1)
+        else:
+            serializer.save()
+
+    @action(detail=False, methods=['post'])
+    def bulk(self, request):
+        """Create/update roster rows in the given order (Excel / paste import)."""
+        course_id = request.data.get('course')
+        rows = request.data.get('students') or []
+        if not course_id:
+            return Response({'error': 'course is required'}, status=400)
+        course = Course.objects.filter(pk=course_id).first()
+        if not course:
+            return Response({'error': 'Course not found.'}, status=404)
+        if not faculty_owns_course(request.user, course):
+            return Response({'error': 'Not allowed.'}, status=403)
+
+        parsed = []
+        seen = set()
+        for row in rows:
+            roll = str(row.get('roll_number') or '').strip()
+            if not roll:
+                continue
+            name = str(row.get('name') or '').strip()
+            key = roll.casefold()
+            if key in seen:
+                continue
+            seen.add(key)
+            batch = str(row.get('batch') or '').strip()
+            parsed.append((roll, name, key, batch))
+        if not parsed:
+            return Response({'error': 'No valid student rows found.'}, status=400)
+
+        mode = (request.data.get('mode') or 'replace_order').strip()
+        if mode != 'match_only':
+            parsed = [row for row in parsed if row[1]]
+            if not parsed:
+                return Response({'error': 'No valid student rows found.'}, status=400)
+        created = 0
+        updated = 0
+        with transaction.atomic():
+            existing = {
+                s.roll_number.casefold(): s
+                for s in Student.objects.select_for_update().filter(course=course)
+            }
+            if mode == 'append':
+                mx = Student.objects.filter(course=course).aggregate(m=Max('sort_order'))['m']
+                next_order = (mx if mx is not None else -1) + 1
+                for roll, name, key, batch in parsed:
+                    obj = existing.get(key)
+                    if obj:
+                        obj.name = name
+                        fields = ['name']
+                        if batch:
+                            obj.batch = batch
+                            fields.append('batch')
+                        obj.save(update_fields=fields)
+                        updated += 1
+                    else:
+                        Student.objects.create(
+                            course=course, roll_number=roll, name=name, batch=batch, sort_order=next_order,
+                        )
+                        next_order += 1
+                        created += 1
+            elif mode == 'match_only':
+                for roll, name, key, batch in parsed:
+                    obj = existing.get(key)
+                    if not obj:
+                        continue
+                    fields = []
+                    if name and not obj.name:
+                        obj.name = name
+                        fields.append('name')
+                    if batch and obj.batch != batch:
+                        obj.batch = batch
+                        fields.append('batch')
+                    if fields:
+                        obj.save(update_fields=fields)
+                        updated += 1
+            else:
+                uploaded_keys = set()
+                for i, (roll, name, key, batch) in enumerate(parsed):
+                    uploaded_keys.add(key)
+                    obj = existing.get(key)
+                    if obj:
+                        obj.roll_number = roll
+                        obj.name = name
+                        obj.sort_order = i
+                        fields = ['roll_number', 'name', 'sort_order']
+                        if batch:
+                            obj.batch = batch
+                            fields.append('batch')
+                        obj.save(update_fields=fields)
+                        updated += 1
+                    else:
+                        obj = Student.objects.create(
+                            course=course, roll_number=roll, name=name, batch=batch, sort_order=i,
+                        )
+                        existing[key] = obj
+                        created += 1
+                rest = [
+                    s for s in Student.objects.filter(course=course)
+                    if s.roll_number.casefold() not in uploaded_keys
+                ]
+                rest.sort(key=lambda s: (s.sort_order, s.id))
+                for j, s in enumerate(rest):
+                    nxt = len(parsed) + j
+                    if s.sort_order != nxt:
+                        s.sort_order = nxt
+                        s.save(update_fields=['sort_order'])
+
+        students = Student.objects.filter(course=course).order_by('sort_order', 'id')
+        return Response({
+            'created': created,
+            'updated': updated,
+            'count': students.count(),
+            'students': StudentSerializer(students, many=True).data,
+        }, status=status.HTTP_200_OK)
 
 
 class StudentMarkViewSet(viewsets.ModelViewSet):

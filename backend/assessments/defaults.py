@@ -1,5 +1,5 @@
 """Default T1/T2/T3/TA/Feedback blocks and question columns for a course offering."""
-from .models import Assessment, AssessmentQuestion, GradeBand, SHEET_TYPES
+from .models import Assessment, AssessmentQuestion, GradeBand, LAB_SHEET_TYPES, SHEET_TYPES
 
 DEFAULT_LABELS = {
     'T1': 'Exam: T1',
@@ -7,6 +7,9 @@ DEFAULT_LABELS = {
     'T3': 'Exam: T3',
     'TA': 'TA Marks',
     'FEEDBACK': 'Course Exit Feedback',
+    'MID': 'Mid Term',
+    'END': 'End Term',
+    'D2D': 'D2D',
 }
 
 DEFAULT_GRADES = [
@@ -62,28 +65,44 @@ def default_questions(assessment_type, outcomes):
             }
             for i, co in enumerate(outcomes)
         ]
+    if assessment_type == 'MID':
+        return [
+            {'key': 'Q1', 'label': 'Q1 (10 marks)', 'max_marks': 10, 'course_outcome_id': _co_id(outcomes, 1)},
+            {'key': 'Q2', 'label': 'Q2 (10 marks)', 'max_marks': 10, 'course_outcome_id': _co_id(outcomes, 2)},
+        ]
+    if assessment_type == 'END':
+        return [
+            {'key': 'Q1', 'label': 'Q1 (10 marks)', 'max_marks': 10, 'course_outcome_id': _co_id(outcomes, 2)},
+            {'key': 'Q2', 'label': 'Q2 (10 marks)', 'max_marks': 10, 'course_outcome_id': _co_id(outcomes, 2)},
+        ]
+    if assessment_type == 'D2D':
+        return [
+            {'key': 'EVAL1_CO1', 'label': '[CO1] (5 Marks)', 'max_marks': 5, 'course_outcome_id': _co_id(outcomes, 0), 'group': 'Eval1'},
+            {'key': 'EVAL1_CO4', 'label': '[CO4] (10 marks)', 'max_marks': 10, 'course_outcome_id': _co_id(outcomes, 3), 'group': 'Eval1'},
+            {'key': 'EVAL2_CO4', 'label': '[CO4] 15 marks', 'max_marks': 15, 'course_outcome_id': _co_id(outcomes, 3), 'group': 'Eval2'},
+            {'key': 'PBL_CO2', 'label': '[CO2] 10 marks', 'max_marks': 10, 'course_outcome_id': _co_id(outcomes, 1), 'group': 'PBL'},
+            {'key': 'PBL_CO5', 'label': '[CO5] 10 marks', 'max_marks': 10, 'course_outcome_id': _co_id(outcomes, 4), 'group': 'PBL'},
+        ]
     return []
 
 
-def ensure_sheet_blocks(course):
+def ensure_blocks(course, types):
     outcomes = list(course.outcomes.all().order_by('order', 'id'))
     created = []
-    for typ in SHEET_TYPES:
+    for typ in types:
         qs = Assessment.objects.filter(course=course, assessment_type=typ).order_by('id')
         obj = qs.first()
-        was_created = False
         if obj is None:
             obj = Assessment.objects.create(
                 course=course,
                 assessment_type=typ,
-                exam_label=DEFAULT_LABELS[typ],
+                exam_label=DEFAULT_LABELS.get(typ, typ),
                 target_percent=50,
                 use_ceiling=typ in ('T3', 'TA'),
                 max_marks=20,
             )
-            was_created = True
         if not obj.exam_label:
-            obj.exam_label = DEFAULT_LABELS[typ]
+            obj.exam_label = DEFAULT_LABELS.get(typ, typ)
             obj.save(update_fields=['exam_label'])
         if not obj.questions.exists():
             for i, q in enumerate(default_questions(typ, outcomes)):
@@ -94,6 +113,7 @@ def ensure_sheet_blocks(course):
                     max_marks=q['max_marks'],
                     course_outcome_id=q['course_outcome_id'],
                     order=i,
+                    group=q.get('group') or '',
                 )
             created.append(typ)
         total = sum(float(q.max_marks) for q in obj.questions.all())
@@ -104,3 +124,11 @@ def ensure_sheet_blocks(course):
         for i, (mn, g) in enumerate(DEFAULT_GRADES):
             GradeBand.objects.create(course=course, min_marks=mn, grade=g, order=i)
     return created
+
+
+def ensure_sheet_blocks(course):
+    return ensure_blocks(course, SHEET_TYPES)
+
+
+def ensure_lab_blocks(course):
+    return ensure_blocks(course, LAB_SHEET_TYPES)

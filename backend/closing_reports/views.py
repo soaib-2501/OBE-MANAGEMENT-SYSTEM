@@ -6,6 +6,7 @@ from attainments.year_utils import previous_academic_year
 from courses.models import Course
 from courses.serializers import CourseSerializer
 
+from .history import compact_year
 from .models import ClosingReport, ClosingYearSnapshot
 from .serializers import ClosingReportSerializer, ClosingYearSnapshotSerializer
 from .services import build_synced, collect_history, hydrate_report, seed_dummy_history
@@ -37,6 +38,8 @@ def payload(course, report, force_tables=False):
             'has_stored': bool(stored),
         },
         'previous_academic_year': previous_academic_year(course.academic_year),
+        'previous_year_label': compact_year(previous_academic_year(course.academic_year) or ''),
+        'current_year_label': compact_year(course.academic_year),
     }
 
 

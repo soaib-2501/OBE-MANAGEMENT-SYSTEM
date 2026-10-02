@@ -7,15 +7,11 @@ DEFAULT_TEACHING = [
 ]
 
 DEFAULT_WEAK = [
-    {'label': 'Extra classes will be conducted', 'checked': True},
-    {'label': 'Group project will be given to club weak students with bright students', 'checked': True},
-    {'label': 'Bright students may assist in conducting extra classes', 'checked': False},
+    {'action': '', 'assignment': ''},
 ]
 
 DEFAULT_BRIGHT = [
-    {'label': 'Will motivate to work on some research based projects', 'checked': True},
-    {'label': 'Assign a real-life project to demonstrate to the class', 'checked': False},
-    {'label': 'Study contemporary techniques/technologies and present findings to class', 'checked': False},
+    {'action': '', 'assignment': ''},
 ]
 
 DEFAULT_EVAL = [

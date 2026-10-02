@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import AssessmentToolsDocument
+from .models import AssessmentToolsDocument, tools_are_co_rows
 
 
 class AssessmentToolsDocumentSerializer(serializers.ModelSerializer):
@@ -16,28 +16,15 @@ class AssessmentToolsDocumentSerializer(serializers.ModelSerializer):
             return []
         if not isinstance(value, list):
             raise serializers.ValidationError('Tools must be a list.')
+        if not tools_are_co_rows(value) and value:
+            raise serializers.ValidationError('Each row needs direct and indirect assessment tools.')
         cleaned = []
-        for tool in value:
-            if not isinstance(tool, dict):
-                raise serializers.ValidationError('Each tool must be an object.')
-            questions = tool.get('questions') or []
-            if not isinstance(questions, list):
-                raise serializers.ValidationError('Each tool needs a questions list.')
+        for row in value:
+            if not isinstance(row, dict):
+                raise serializers.ValidationError('Each row must be an object.')
             cleaned.append({
-                'name': str(tool.get('name') or '').strip() or 'T-1',
-                'term': str(tool.get('term') or '').strip(),
-                'assessment_type': str(tool.get('assessment_type') or '').strip(),
-                'questions': [
-                    {
-                        'qno': str(q.get('qno') or '').strip() or f'Q{i + 1}',
-                        'co_code': str(q.get('co_code') or '').strip(),
-                        'ques_level': str(q.get('ques_level') or '').strip(),
-                        'remarks': str(q.get('remarks') or ''),
-                        'max_marks': str(q.get('max_marks') or '').strip(),
-                        'source_key': str(q.get('source_key') or '').strip(),
-                    }
-                    for i, q in enumerate(questions)
-                    if isinstance(q, dict)
-                ],
+                'co_code': str(row.get('co_code') or '').strip(),
+                'direct': str(row.get('direct') or '').strip(),
+                'indirect': str(row.get('indirect') or '').strip(),
             })
         return cleaned

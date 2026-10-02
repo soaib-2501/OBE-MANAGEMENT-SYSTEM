@@ -3,6 +3,7 @@ from courses.models import Course
 
 
 SHEET_TYPES = ('T1', 'T2', 'T3', 'TA', 'FEEDBACK')
+LAB_SHEET_TYPES = ('MID', 'END', 'D2D')
 
 
 class Assessment(models.Model):
@@ -16,6 +17,9 @@ class Assessment(models.Model):
         ASSIGNMENT = 'ASSIGNMENT', 'Assignment'
         ATTENDANCE = 'ATTENDANCE', 'Attendance'
         PROJECT = 'PROJECT', 'Project'
+        MID = 'MID', 'Mid Term'
+        END = 'END', 'End Term'
+        D2D = 'D2D', 'D2D'
 
     course = models.ForeignKey(Course, on_delete=models.CASCADE, related_name='assessments')
     assessment_type = models.CharField(max_length=12, choices=Type.choices)
@@ -39,6 +43,9 @@ class Assessment(models.Model):
             'T3': 'Exam: T3',
             'TA': 'TA Marks',
             'FEEDBACK': 'Course Exit Feedback',
+            'MID': 'Mid Term',
+            'END': 'End Term',
+            'D2D': 'D2D',
         }.get(self.assessment_type, self.assessment_type)
 
 
@@ -53,6 +60,7 @@ class AssessmentQuestion(models.Model):
         related_name='assessment_questions',
     )
     order = models.PositiveSmallIntegerField(default=0)
+    group = models.CharField(max_length=40, blank=True)
 
     class Meta:
         ordering = ['order', 'id']
@@ -66,6 +74,7 @@ class Student(models.Model):
     """Shared roster for one course offering / session. Same roll on another year is a different row."""
     roll_number = models.CharField(max_length=30)
     name = models.CharField(max_length=255)
+    batch = models.CharField(max_length=20, blank=True)
     course = models.ForeignKey(Course, on_delete=models.CASCADE, related_name='students')
 
     class Meta:
