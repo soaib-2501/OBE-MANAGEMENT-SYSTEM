@@ -28,19 +28,39 @@ function isEnrolHeader(key) {
   ].includes(key);
 }
 
+function isBatchHeader(key) {
+  return ['batch', 'section', 'grp', 'group', 'sec'].includes(key);
+}
+
 function isNameHeader(key) {
   return ['name', 'fullname', 'studentname', 'student', 'studentfullname'].includes(key);
 }
 
+function isGroupHeader(key) {
+  return ['eval1', 'eval2', 'eval3', 'pbl', 'd2d', 'midviva', 'project'].includes(key);
+}
+
 function isSkipMarkHeader(key, raw) {
   if (!key) return true;
-  if (isSnoHeader(key) || isEnrolHeader(key) || isNameHeader(key)) return true;
+  if (isSnoHeader(key) || isEnrolHeader(key) || isNameHeader(key) || isBatchHeader(key)) return true;
+  if (isGroupHeader(key)) return true;
   if (key.startsWith('total')) return true;
   if (key.includes('percent') || key.includes('pct')) return true;
   if (/%\s*$/.test(cellStr(raw))) return true;
   if (/^co\d+$/.test(key)) return true;
-  if (['timestamp', 'email', 'emailaddress', 'batch', 'grade'].includes(key)) return true;
+  if (['timestamp', 'email', 'emailaddress', 'grade'].includes(key)) return true;
+  if (key.startsWith('labtest') || key.startsWith('attainment')) return true;
   return false;
+}
+
+function extractCoNum(value) {
+  const m = cellStr(value).match(/co\s*(\d+)/i);
+  return m ? Number(m[1]) : null;
+}
+
+function extractMaxMarks(value) {
+  const m = cellStr(value).match(/(\d+)\s*marks?/i);
+  return m ? Number(m[1]) : null;
 }
 
 function isAbsentMark(value) {
@@ -62,6 +82,13 @@ function normalizeQuestionHeader(value) {
   return cellStr(value).replace(/\s*\([^)]*\)\s*$/, '').trim().toLowerCase();
 }
 
+function questionKeyFromHeader(value) {
+  const raw = cellStr(value);
+  const m = raw.match(/q\s*(\d+)/i);
+  if (m) return `q${m[1]}`;
+  return normalizeQuestionHeader(raw).toLowerCase();
+}
+
 function nonEmptyRows(aoa) {
   return (aoa || []).filter((row) => (row || []).some((cell) => cellStr(cell) !== ''));
 }
@@ -73,6 +100,9 @@ const SHEET_HINTS = {
   TA: ['ta', 'ta marks', 'assignment', 'project'],
   FEEDBACK: ['course exit feedback', 'exit feedback', 'feedback', '[1]exit feedback'],
   roster: ['t1', 'roster', 'students'],
+  MID: ['midsem', 'mid sem', 'midterm', 'mid term', 'mid'],
+  END: ['endsem', 'end sem', 'endterm', 'end term', 'end'],
+  D2D: ['d2d', 'day to day', 'day-to-day', 'eval1', 'pbl'],
 };
 
 function pickSheetName(sheetNames, hints) {
@@ -111,8 +141,9 @@ function detectRosterHeader(rows) {
     const keys = (rows[i] || []).map((c) => headerKey(c));
     const enrolIdx = keys.findIndex(isEnrolHeader);
     const nameIdx = keys.findIndex(isNameHeader);
+    const batchIdx = keys.findIndex(isBatchHeader);
     if (enrolIdx >= 0 && nameIdx >= 0) {
-      return { headerIndex: i, enrolIdx, nameIdx };
+      return { headerIndex: i, enrolIdx, nameIdx, batchIdx };
     }
   }
   return null;
@@ -130,11 +161,12 @@ export function parseRosterFromRows(aoa) {
       const row = rows[i] || [];
       const roll_number = cellEnrol(row[header.enrolIdx]);
       const name = cellStr(row[header.nameIdx]);
+      const batch = header.batchIdx >= 0 ? cellStr(row[header.batchIdx]) : '';
       const key = roll_number.toLowerCase();
       if (!roll_number || !name || seen.has(key)) continue;
       if (/^no\.?\s*of students/i.test(name) || /scored\s*>?\s*=?\s*target/i.test(name)) break;
       seen.add(key);
-      students.push({ roll_number, name });
+      students.push({ roll_number, name, batch });
     }
     return students;
   }
@@ -193,15 +225,32 @@ export function parseExamMetaFromRows(aoa) {
 
 function detectMarksHeader(rows) {
   const scan = Math.min(rows.length, 15);
+  let fallback = null;
   for (let i = 0; i < scan; i += 1) {
     const keys = (rows[i] || []).map((c) => headerKey(c));
     const enrolIdx = keys.findIndex(isEnrolHeader);
     const nameIdx = keys.findIndex(isNameHeader);
-    if (enrolIdx >= 0) {
-      return { headerIndex: i, enrolIdx, nameIdx, headers: rows[i] || [] };
-    }
+    const batchIdx = keys.findIndex(isBatchHeader);
+    if (enrolIdx < 0) continue;
+    const found = { headerIndex: i, enrolIdx, nameIdx, batchIdx, headers: rows[i] || [] };
+    if (nameIdx >= 0) return found;
+    if (!fallback) fallback = found;
   }
-  return null;
+  return fallback;
+}
+
+function questionMatchesHeader(q, raw) {
+  const norm = questionKeyFromHeader(raw);
+  const labels = [q.label, q.key].filter(Boolean).map((x) => questionKeyFromHeader(x));
+  if (labels.includes(norm)) return true;
+  const headerCo = extractCoNum(raw);
+  const headerMax = extractMaxMarks(raw);
+  const qCo = extractCoNum(`${q.label || ''} ${q.key || ''}`);
+  const qMax = Number(q.max_marks);
+  if (headerCo != null && qCo != null && headerCo === qCo && headerMax != null && headerMax === qMax) {
+    return true;
+  }
+  return false;
 }
 
 export function parseMarksFromRows(aoa, questions) {
@@ -220,15 +269,16 @@ export function parseMarksFromRows(aoa, questions) {
 
   const usedQuestion = new Set();
   const colToQuestion = new Map();
+  const skipIdentity = (col) => (
+    col === header.enrolIdx || col === header.nameIdx || col === header.batchIdx
+  );
   (header.headers || []).forEach((raw, col) => {
-    if (col === header.enrolIdx || col === header.nameIdx) return;
+    if (skipIdentity(col)) return;
     const key = headerKey(raw);
     if (isSkipMarkHeader(key, raw)) return;
-    const norm = normalizeQuestionHeader(raw);
     const match = qs.find((q, qi) => {
       if (usedQuestion.has(qi)) return false;
-      const labels = [q.label, q.key].filter(Boolean).map((x) => normalizeQuestionHeader(x));
-      return labels.includes(norm);
+      return questionMatchesHeader(q, raw);
     });
     if (match) {
       const qi = qs.indexOf(match);
@@ -240,7 +290,7 @@ export function parseMarksFromRows(aoa, questions) {
   const leftoverCols = [];
   (header.headers || []).forEach((raw, col) => {
     if (colToQuestion.has(col)) return;
-    if (col === header.enrolIdx || col === header.nameIdx) return;
+    if (skipIdentity(col)) return;
     const key = headerKey(raw);
     if (isSkipMarkHeader(key, raw)) return;
     leftoverCols.push(col);
@@ -257,11 +307,12 @@ export function parseMarksFromRows(aoa, questions) {
     const row = rows[i] || [];
     const roll_number = cellEnrol(row[header.enrolIdx]);
     const name = header.nameIdx >= 0 ? cellStr(row[header.nameIdx]) : '';
+    const batch = header.batchIdx >= 0 ? cellStr(row[header.batchIdx]) : '';
     if (!roll_number) continue;
     const key = roll_number.toLowerCase();
     if (seen.has(key)) continue;
     seen.add(key);
-    students.push({ roll_number, name: name || roll_number });
+    students.push({ roll_number, name, batch });
     const marks = {};
     colToQuestion.forEach((q, col) => {
       const raw = row[col];

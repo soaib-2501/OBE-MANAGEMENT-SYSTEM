@@ -3,6 +3,7 @@ import { Link, useParams } from 'react-router-dom';
 import api from '../api/client';
 import CourseSubnav from '../components/CourseSubnav';
 import SheetPreview from '../components/SheetPreview';
+import LabSheetPreview from '../components/LabSheetPreview';
 import { parseExamMetaFromRows, parseMarksFromRows, parseRosterFromRows, readSpreadsheetRows } from '../utils/excelImport';
 import { coursesListLabel, coursesListPath, isLabCourse } from '../utils/offering';
 
@@ -14,14 +15,38 @@ const THEORY_BLOCKS = [
   { key: 'FEEDBACK', label: 'CO Feedback' },
 ];
 
-/** Lab Students & Marks sub-tabs (structure only for non-roster tabs). */
+const LAB_BLOCKS = [
+  { key: 'MID', label: 'Mid Sem' },
+  { key: 'END', label: 'End Sem' },
+  { key: 'D2D', label: 'D2D' },
+];
+
 const LAB_PLACEHOLDER_TABS = [
-  { id: 'mid_sem', label: 'Mid Sem' },
-  { id: 'end_sem', label: 'End Sem' },
-  { id: 'd2d', label: 'D2D' },
   { id: 'exit_survey', label: 'Exit Survey' },
   { id: 'co_attainment', label: 'CO Attainment' },
 ];
+
+const D2D_GROUPS = ['Eval1', 'Eval2', 'PBL'];
+
+function questionGroup(q) {
+  if (q?.group) return q.group;
+  const key = String(q?.key || '');
+  if (/^EVAL1/i.test(key)) return 'Eval1';
+  if (/^EVAL2/i.test(key)) return 'Eval2';
+  if (/^PBL/i.test(key)) return 'PBL';
+  return '';
+}
+
+function groupSpans(questions) {
+  const spans = [];
+  (questions || []).forEach((q) => {
+    const group = questionGroup(q);
+    const last = spans[spans.length - 1];
+    if (last && last.group === group) last.count += 1;
+    else spans.push({ group, count: 1 });
+  });
+  return spans;
+}
 
 function list(data) {
   return data?.results ?? data ?? [];
@@ -160,7 +185,7 @@ export default function CourseAssessments() {
   const [error, setError] = useState('');
   const [status, setStatus] = useState('');
   const [saving, setSaving] = useState(false);
-  const [studentForm, setStudentForm] = useState({ roll_number: '', name: '' });
+  const [studentForm, setStudentForm] = useState({ roll_number: '', name: '', batch: '' });
   const [bulkText, setBulkText] = useState('');
   const [marksGrid, setMarksGrid] = useState({});
   const [uploading, setUploading] = useState(false);
@@ -182,12 +207,12 @@ export default function CourseAssessments() {
       ]);
       setCourse(courseRes.data);
       setStudents(list(studentRes.data));
-      if (isLabCourse(courseRes.data)) {
-        setAssessments([]);
+      const labCourse = isLabCourse(courseRes.data);
+      const wanted = labCourse ? LAB_BLOCKS : THEORY_BLOCKS;
+      if (labCourse) {
         setGrades(list(gradeRes.data));
-        return;
       }
-      const nextA = list(assessmentRes.data).filter((a) => THEORY_BLOCKS.some((b) => b.key === a.assessment_type));
+      const nextA = list(assessmentRes.data).filter((a) => wanted.some((b) => b.key === a.assessment_type));
       const unique = [];
       const seen = new Set();
       for (const a of nextA) {
@@ -195,10 +220,10 @@ export default function CourseAssessments() {
         seen.add(a.assessment_type);
         unique.push(a);
       }
-      if (unique.length < THEORY_BLOCKS.length) {
+      if (unique.length < wanted.length) {
         await api.post('/assessments/ensure/', { course: Number(id) });
         const refreshed = list((await api.get(`/assessments/?course=${id}`)).data)
-          .filter((a) => THEORY_BLOCKS.some((b) => b.key === a.assessment_type));
+          .filter((a) => wanted.some((b) => b.key === a.assessment_type));
         const uniq2 = [];
         const seen2 = new Set();
         for (const a of refreshed) {
@@ -254,7 +279,7 @@ export default function CourseAssessments() {
   }
 
   useEffect(() => {
-    const examTab = THEORY_BLOCKS.some((b) => b.key === tab);
+    const examTab = THEORY_BLOCKS.some((b) => b.key === tab) || LAB_BLOCKS.some((b) => b.key === tab);
     if (tab === 'attainment' || tab === 'result' || examTab) loadSheet();
   }, [tab, id]);
 
@@ -271,7 +296,7 @@ export default function CourseAssessments() {
     setError('');
     try {
       await api.post('/assessments/students/', { ...studentForm, course: Number(id) });
-      setStudentForm({ roll_number: '', name: '' });
+      setStudentForm({ roll_number: '', name: '', batch: '' });
       await loadAll();
     } catch (err) {
       setError(formatError(err, 'Could not add student.'));
@@ -286,10 +311,18 @@ export default function CourseAssessments() {
     try {
       for (const line of lines) {
         if (/^roll/i.test(line) || /^enrol/i.test(line)) continue;
-        const [roll_number, ...rest] = line.split(/[,\t]/).map((p) => p.trim());
-        const name = rest.join(' ').trim();
+        const parts = line.split(/[,\t]/).map((p) => p.trim()).filter(Boolean);
+        const roll_number = parts[0];
+        let name = '';
+        let batch = '';
+        if (parts.length >= 3) {
+          batch = parts[parts.length - 1];
+          name = parts.slice(1, -1).join(' ');
+        } else {
+          name = parts.slice(1).join(' ');
+        }
         if (!roll_number || !name) continue;
-        studentsRows.push({ roll_number, name });
+        studentsRows.push(batch ? { roll_number, name, batch } : { roll_number, name });
       }
       if (!studentsRows.length) {
         setError('No valid enrol, name rows to import.');
@@ -358,6 +391,7 @@ export default function CourseAssessments() {
           max_marks: q.max_marks,
           course_outcome: q.course_outcome || null,
           order: i,
+          group: q.group || questionGroup(q),
         })),
       });
       setStatus('Settings saved.');
@@ -425,17 +459,20 @@ export default function CourseAssessments() {
       const parsed = parseMarksFromRows(rows, block.questions || []);
       const meta = parseExamMetaFromRows(rows);
       if (!parsed.students.length && !Object.keys(parsed.marksByEnrol).length) {
-        setError('Could not read marks. Use columns Enrol No, Name, then Q1, Q2, Q3, … matching this tab.');
+        setError('Could not read marks. Use columns Rollno / Enrol No, Name, Batch, then the mark columns for this tab.');
         return;
       }
       let roster = students;
-      if (parsed.students.length) {
+      const payload = parsed.students
+        .filter((s) => s.roll_number)
+        .map((s) => ({ roll_number: s.roll_number, name: s.name || '', batch: s.batch || '' }));
+      if (payload.length) {
         const res = await api.post('/assessments/students/bulk/', {
           course: Number(id),
-          mode: 'replace_order',
-          students: parsed.students,
+          mode: isLabCourse(course) ? 'match_only' : 'replace_order',
+          students: payload,
         });
-        roster = res.data.students || [];
+        roster = res.data.students || students;
         setStudents(roster);
       }
       const next = { ...marksGrid };
@@ -467,7 +504,7 @@ export default function CourseAssessments() {
         });
         await loadSheet();
       }
-      setStatus(`Uploaded ${filled} marks from Excel. Cells are still editable — change any value and click Save marks & calculate.`);
+      setStatus(`Uploaded ${filled} marks from Excel${payload.some((s) => s.batch) ? ' (batch mapped by roll number)' : ''}. Names stay in roster order.`);
     } catch (err) {
       setError(formatError(err, 'Could not import marks from Excel.'));
     } finally {
@@ -480,6 +517,7 @@ export default function CourseAssessments() {
     if (lab) {
       return [
         { id: 'roster', label: 'Roster' },
+        ...LAB_BLOCKS,
         ...LAB_PLACEHOLDER_TABS,
       ];
     }
@@ -549,6 +587,10 @@ export default function CourseAssessments() {
               value={studentForm.roll_number} onChange={(e) => setStudentForm({ ...studentForm, roll_number: e.target.value })} />
             <input required placeholder="Name" className="border rounded px-2 py-1.5 text-sm flex-1"
               value={studentForm.name} onChange={(e) => setStudentForm({ ...studentForm, name: e.target.value })} />
+            {lab && (
+              <input placeholder="Batch" className="border rounded px-2 py-1.5 text-sm w-24"
+                value={studentForm.batch || ''} onChange={(e) => setStudentForm({ ...studentForm, batch: e.target.value })} />
+            )}
             <button type="submit" className="bg-slate-900 text-white px-3 py-1.5 rounded text-sm font-semibold">Add student</button>
           </form>
           <textarea className="w-full border rounded px-3 py-2 text-sm h-24 mb-2"
@@ -559,14 +601,15 @@ export default function CourseAssessments() {
             <ExcelUploadButton disabled={uploading} onFile={importRosterExcel} label={uploading ? 'Uploading…' : 'Upload Excel'} />
           </div>
           <table className="w-full text-sm">
-            <thead><tr className="text-left text-slate-500 border-b"><th className="py-2">S.No</th><th>Enrol No</th><th>Name</th><th></th></tr></thead>
+            <thead><tr className="text-left text-slate-500 border-b"><th className="py-2">S.No</th><th>Enrol No</th><th>Name</th>{lab ? <th>Batch</th> : null}<th></th></tr></thead>
             <tbody>
-              {students.length === 0 && <tr><td colSpan={4} className="py-4 text-slate-400">No students yet.</td></tr>}
+              {students.length === 0 && <tr><td colSpan={lab ? 5 : 4} className="py-4 text-slate-400">No students yet.</td></tr>}
               {students.map((s, i) => (
                 <tr key={s.id} className="border-b">
                   <td className="py-2">{i + 1}</td>
                   <td className="font-medium">{s.roll_number}</td>
                   <td>{s.name}</td>
+                  {lab ? <td>{s.batch || ''}</td> : null}
                   <td><button type="button" className="text-xs text-red-600" onClick={() => deleteStudent(s.id)}>Remove</button></td>
                 </tr>
               ))}
@@ -694,8 +737,7 @@ export default function CourseAssessments() {
             )}
           </section>
           </div>
-          <SheetPreview
-            kind={tab}
+          <LabSheetPreview
             course={course}
             students={students}
             block={block}
@@ -707,7 +749,160 @@ export default function CourseAssessments() {
         </div>
       )}
 
-      {!lab && tab === 'attainment' && (
+      {lab && LAB_BLOCKS.some((b) => b.key === tab) && block && (
+        <div className="space-y-4">
+          <div className="no-print space-y-4">
+            <section className="bg-white shadow rounded-lg p-6">
+              <h2 className="font-semibold mb-3">{block.exam_label || tab} settings</h2>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
+                <label className="text-xs">Exam label
+                  <input className="mt-1 w-full border rounded px-2 py-1 text-sm" value={block.exam_label || ''}
+                    onChange={(e) => patchBlock({ exam_label: e.target.value })} />
+                </label>
+                <label className="text-xs">Target %
+                  <input className="mt-1 w-full border rounded px-2 py-1 text-sm" value={block.target_percent}
+                    onChange={(e) => patchBlock({ target_percent: e.target.value })} />
+                </label>
+                <label className="text-xs">Total students
+                  <input className="mt-1 w-full border rounded px-2 py-1 text-sm"
+                    value={Number(block.total_students) > 0 ? block.total_students : students.length}
+                    onChange={(e) => patchBlock({ total_students: e.target.value })} />
+                </label>
+                <label className="text-xs">No. appeared
+                  <input className="mt-1 w-full border rounded px-2 py-1 text-sm"
+                    value={Number(block.appeared) > 0 ? block.appeared : ''}
+                    placeholder="auto from marks"
+                    onChange={(e) => patchBlock({ appeared: e.target.value })} />
+                </label>
+              </div>
+              <h3 className="text-sm font-semibold mb-2">
+                {tab === 'D2D' ? 'Eval / PBL components (group · label · max · CO)' : 'Questions (label · max · CO)'}
+              </h3>
+              {(block.questions || []).map((q, i) => (
+                <div key={q.id || i} className={`grid gap-2 mb-2 ${tab === 'D2D' ? 'grid-cols-[110px_1fr_80px_140px_28px]' : 'grid-cols-[1fr_80px_140px_28px]'}`}>
+                  {tab === 'D2D' && (
+                    <select className="border rounded px-2 py-1 text-sm" value={questionGroup(q)}
+                      onChange={(e) => {
+                        const questions = [...block.questions];
+                        questions[i] = { ...q, group: e.target.value };
+                        patchQuestions(questions);
+                      }}>
+                      {D2D_GROUPS.map((g) => <option key={g} value={g}>{g}</option>)}
+                    </select>
+                  )}
+                  <input className="border rounded px-2 py-1 text-sm" value={q.label}
+                    onChange={(e) => {
+                      const questions = [...block.questions];
+                      questions[i] = { ...q, label: e.target.value };
+                      patchQuestions(questions);
+                    }} />
+                  <input className="border rounded px-2 py-1 text-sm" value={q.max_marks}
+                    onChange={(e) => {
+                      const questions = [...block.questions];
+                      questions[i] = { ...q, max_marks: e.target.value };
+                      patchQuestions(questions);
+                    }} />
+                  <select className="border rounded px-2 py-1 text-sm" value={q.course_outcome || ''}
+                    onChange={(e) => {
+                      const questions = [...block.questions];
+                      questions[i] = { ...q, course_outcome: e.target.value ? Number(e.target.value) : null };
+                      patchQuestions(questions);
+                    }}>
+                    <option value="">—</option>
+                    {outcomes.map((co) => <option key={co.id} value={co.id}>{co.co_code}</option>)}
+                  </select>
+                  <button type="button" className="text-red-600" onClick={() => patchQuestions(block.questions.filter((_, j) => j !== i))}>✕</button>
+                </div>
+              ))}
+              <button type="button" className="text-xs font-semibold mr-3" onClick={() => patchQuestions([
+                ...(block.questions || []),
+                tab === 'D2D'
+                  ? { key: `Q${Date.now()}`, label: '[CO] (5 Marks)', max_marks: 5, course_outcome: null, group: 'Eval1' }
+                  : { key: `Q${Date.now()}`, label: 'New Q', max_marks: 10, course_outcome: null },
+              ])}>+ Add question</button>
+              <button type="button" onClick={saveBlockSettings} disabled={saving} className="bg-slate-200 px-3 py-1.5 rounded text-xs font-semibold">
+                Save settings
+              </button>
+            </section>
+
+            <section className="bg-white shadow rounded-lg p-6 overflow-auto">
+              <div className="flex flex-wrap justify-between items-center gap-2 mb-3">
+                <h2 className="font-semibold">Marks — {students.length} students (roster order)</h2>
+                <div className="flex flex-wrap gap-2">
+                  <ExcelUploadButton disabled={uploading || saving} onFile={importMarksExcel} label={uploading ? 'Uploading…' : 'Upload Excel marks'} />
+                  <button type="button" onClick={saveMarks} disabled={saving || !students.length} className="bg-slate-900 text-white px-3 py-1.5 rounded text-sm font-semibold disabled:opacity-50">
+                    {saving ? 'Saving…' : 'Save marks'}
+                  </button>
+                </div>
+              </div>
+              <p className="text-[11px] text-slate-500 mb-3">
+                Names stay in roster sequence. Upload Excel with Rollno, Name, Batch and mark columns — Batch and marks map by roll number. Roster order is not changed.
+              </p>
+              {students.length === 0 && <p className="text-sm text-slate-500">Add students on the Roster tab first.</p>}
+              {students.length > 0 && (
+                <table className="w-full text-xs min-w-[640px] border-collapse">
+                  <thead>
+                    {tab === 'D2D' && (
+                      <tr className="bg-slate-50">
+                        <th className="border p-1" colSpan={4}></th>
+                        {groupSpans(block.questions || []).map((span, i) => (
+                          <th key={`g-${i}`} className="border p-1" colSpan={span.count}>{span.group}</th>
+                        ))}
+                      </tr>
+                    )}
+                    <tr className="bg-slate-50">
+                      <th className="border p-1">Sno</th>
+                      <th className="border p-1">Rollno</th>
+                      <th className="border p-1">Name</th>
+                      <th className="border p-1">Batch</th>
+                      {(block.questions || []).map((q) => (
+                        <th key={q.id || q.key} className="border p-1">{q.label} ({q.max_marks})</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {students.map((s, i) => (
+                      <tr key={s.id}>
+                        <td className="border p-1 text-center">{i + 1}</td>
+                        <td className="border p-1">{s.roll_number}</td>
+                        <td className="border p-1">{s.name}</td>
+                        <td className="border p-1">{s.batch || ''}</td>
+                        {(block.questions || []).map((q) => (
+                          <td key={q.id || q.key} className="border p-0">
+                            <input
+                              className="w-16 text-center py-1 bg-transparent"
+                              value={marksGrid[`${s.id}-${q.id}`] ?? ''}
+                              onChange={(e) => setMarksGrid((prev) => ({ ...prev, [`${s.id}-${q.id}`]: e.target.value }))}
+                            />
+                          </td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </section>
+          </div>
+          <LabSheetPreview
+            course={course}
+            students={students}
+            block={block}
+            marksGrid={marksGrid}
+            outcomes={outcomes}
+            previewing={previewing}
+            onToggle={() => setPreviewing((v) => !v)}
+          />
+        </div>
+      )}
+
+      {lab && LAB_PLACEHOLDER_TABS.some((t) => t.id === tab) && (
+        <section className="bg-white shadow rounded-lg p-6">
+          <h2 className="font-semibold mb-1">{LAB_PLACEHOLDER_TABS.find((t) => t.id === tab)?.label}</h2>
+          <p className="text-sm text-slate-500">This tab will be completed next. Mid Sem and End Sem marks are on those tabs.</p>
+        </section>
+      )}
+
+      {!lab && !lab && tab === 'attainment' && (
         <section className="bg-white shadow rounded-lg p-6 overflow-auto">
           <div className="no-print">
           <div className="flex flex-wrap justify-between gap-2 mb-4">

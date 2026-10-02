@@ -3,7 +3,9 @@ import { Link, useParams } from 'react-router-dom';
 import api from '../api/client';
 import CourseSubnav from '../components/CourseSubnav';
 import A4Document from '../components/A4Document';
-import { coordinatorName, coursesListLabel, coursesListPath, teachingFacultyName } from '../utils/offering';
+import {
+  coordinatorName, coursesListLabel, coursesListPath, isLabCourse, teachingFacultyName,
+} from '../utils/offering';
 
 const LEVEL_LABELS = {
   REMEMBER: 'Remember Level (Level 1)',
@@ -34,16 +36,87 @@ function mappingAvg(outcomes, poKey) {
   return String(avg).replace(/\.?0+$/, '');
 }
 
-function shortYear(year) {
-  if (!year) return '—';
-  const m = String(year).match(/(\d{2})\s*[-/]\s*(\d{2,4})$/);
-  if (!m) return year;
+function compactYear(year) {
+  if (!year) return '';
+  const m = String(year).match(/^(\d{4})\s*[-/]\s*(\d{2,4})$/);
+  if (!m) return String(year);
   const end = m[2].length === 4 ? m[2].slice(-2) : m[2];
   return `${m[1]}-${end}`;
 }
 
+function poHeadParts(key) {
+  const m = String(key || '').match(/^(PO|PSO)\s*(\d+)$/i);
+  if (!m) return [key, ''];
+  return [m[1].toUpperCase(), m[2]];
+}
+
 function isFilled(row) {
   return Object.values(row || {}).some((v) => String(v || '').trim());
+}
+
+function mappedPoKeys(outcomes, allKeys) {
+  const used = new Set();
+  (outcomes || []).forEach((co) => {
+    (co.mappings || []).forEach((m) => {
+      if (m.level !== null && m.level !== undefined && m.level !== '' && Number(m.level) !== 0) {
+        used.add(m.po_key);
+      }
+    });
+  });
+  const cols = (allKeys || []).filter((k) => used.has(k));
+  return cols.length ? cols : allKeys;
+}
+
+function GradeCountChart({ grades }) {
+  const rows = (grades || []).filter((g) => g.grade && g.grade !== 'I');
+  const counts = rows.map((g) => Number(g.count) || 0);
+  const maxVal = Math.max(4, ...counts);
+  const step = maxVal <= 8 ? 2 : maxVal <= 16 ? 4 : 5;
+  const yMax = Math.ceil(maxVal / step) * step || step;
+  const width = 420;
+  const height = 220;
+  const padL = 36;
+  const padR = 70;
+  const padT = 16;
+  const padB = 32;
+  const plotW = width - padL - padR;
+  const plotH = height - padT - padB;
+  const barW = Math.min(28, plotW / Math.max(rows.length, 1) * 0.55);
+  const ticks = [];
+  for (let y = 0; y <= yMax; y += step) ticks.push(y);
+
+  return (
+    <div className="grade-chart-wrap">
+      <svg viewBox={`0 0 ${width} ${height}`} className="grade-chart" role="img" aria-label="Grade count chart">
+        {ticks.map((y) => {
+          const py = padT + plotH - (y / yMax) * plotH;
+          return (
+            <g key={y}>
+              <line x1={padL} x2={padL + plotW} y1={py} y2={py} stroke="#d0d0d0" strokeWidth="1" />
+              <text x={padL - 6} y={py + 3} textAnchor="end" fontSize="10" fill="#444">{y}</text>
+            </g>
+          );
+        })}
+        <line x1={padL} x2={padL} y1={padT} y2={padT + plotH} stroke="#666" strokeWidth="1" />
+        <line x1={padL} x2={padL + plotW} y1={padT + plotH} y2={padT + plotH} stroke="#666" strokeWidth="1" />
+        {rows.map((g, i) => {
+          const count = Number(g.count) || 0;
+          const slot = plotW / rows.length;
+          const x = padL + i * slot + (slot - barW) / 2;
+          const h = (count / yMax) * plotH;
+          const y = padT + plotH - h;
+          return (
+            <g key={g.grade}>
+              <rect x={x} y={y} width={barW} height={Math.max(h, 0)} fill="#4472C4" />
+              <text x={x + barW / 2} y={padT + plotH + 14} textAnchor="middle" fontSize="10" fill="#222">{g.grade}</text>
+            </g>
+          );
+        })}
+        <rect x={width - 62} y={padT + 8} width="10" height="10" fill="#4472C4" />
+        <text x={width - 48} y={padT + 17} fontSize="10" fill="#222">Count</text>
+      </svg>
+    </div>
+  );
 }
 
 const SAVE_FIELDS = [
@@ -60,6 +133,8 @@ export default function CourseClosingReport() {
   const [report, setReport] = useState(null);
   const [synced, setSynced] = useState({});
   const [history, setHistory] = useState({ prior_years: [], by_year: {}, has_stored: false, stored_years: [] });
+  const [prevYearLabel, setPrevYearLabel] = useState('');
+  const [currentYearLabel, setCurrentYearLabel] = useState('');
   const [error, setError] = useState('');
   const [status, setStatus] = useState('');
   const [saving, setSaving] = useState(false);
@@ -71,6 +146,8 @@ export default function CourseClosingReport() {
     setReport(data.report);
     setSynced(data.synced || {});
     setHistory(data.history || { prior_years: [], by_year: {}, has_stored: false, stored_years: [] });
+    setPrevYearLabel(data.previous_year_label || compactYear(data.previous_academic_year) || '');
+    setCurrentYearLabel(data.current_year_label || compactYear(data.course?.academic_year) || '');
   }
 
   async function load() {
@@ -79,7 +156,11 @@ export default function CourseClosingReport() {
   }
 
   useEffect(() => {
-    load().catch(() => setError('Failed to load closing report.'));
+    load().catch((err) => {
+      const data = err.response?.data;
+      const msg = typeof data === 'string' ? data : (data?.error || data?.detail || 'Failed to load closing report.');
+      setError(typeof msg === 'string' ? msg : JSON.stringify(msg));
+    });
   }, [id]);
 
   const outcomes = useMemo(
@@ -87,8 +168,12 @@ export default function CourseClosingReport() {
     [course],
   );
   const poKeys = course?.po_pso_keys?.length ? course.po_pso_keys : ['PO1', 'PO2', 'PO3', 'PSO1', 'PSO2'];
+  const actionPoKeys = synced.mapped_po_keys?.length ? synced.mapped_po_keys : mappedPoKeys(outcomes, poKeys);
   const semesterWord = course?.semester === 'EVEN' ? 'Even' : 'Odd';
-  const priorYears = history.prior_years || [];
+  const lab = isLabCourse(course);
+  const nums = lab
+    ? { coAtt: 7, poAtt: 8, summary: 9, teach: 10, evals: 11, coAct: 12, poAct: 13, sug: 14, weak: 15, bright: 16 }
+    : { coAtt: 3, poAtt: 4, summary: 5, teach: 6, evals: 7, coAct: 8, poAct: 9, sug: 10, weak: 11, bright: 12 };
 
   function patchReport(partial) {
     setReport((prev) => ({ ...prev, ...partial }));
@@ -156,6 +241,14 @@ export default function CourseClosingReport() {
     patchReport({ [field]: next });
   }
 
+  if (error && (!course || !report)) {
+    return (
+      <div className="p-8">
+        <p className="text-red-700 text-sm">{error}</p>
+      </div>
+    );
+  }
+
   if (!course || !report) return <div className="p-8">Loading…</div>;
 
   const dept = course.department || '—';
@@ -163,11 +256,14 @@ export default function CourseClosingReport() {
   const facultyPerson = teachingFacultyName(course);
   const ay = course.academic_year;
   const nba = course.nba_code || '—';
-  const td = 'border border-slate-800 px-2 py-1';
-  const th = 'border border-slate-800 px-2 py-1 bg-slate-50';
+  const td = 'border border-slate-800 px-1.5 py-1';
+  const th = 'border border-slate-800 px-1.5 py-1 bg-white font-semibold text-center';
   const grades = report.grade_percents?.length ? report.grade_percents : (synced.grade_percents || []);
-  const suggestionsFilled = (report.suggestions || []).some(isFilled);
+  const totalStudents = synced.total_students || 0;
+  const suggestionsFilled = (report.suggestions || []).filter(isFilled);
   const storedLabel = (history.stored_years || []).join(', ') || 'none';
+  const prevLabel = prevYearLabel || compactYear((history.prior_years || [])[0]) || 'previous year';
+  const currLabel = currentYearLabel || compactYear(ay) || ay;
 
   return (
     <div className="p-8 max-w-6xl mx-auto print:p-0 print:max-w-none">
@@ -184,12 +280,8 @@ export default function CourseClosingReport() {
         {status && <div className="bg-emerald-50 text-emerald-800 text-sm rounded p-3 mb-4">{status}</div>}
 
         <div className="flex flex-wrap gap-2 justify-end mb-4">
-          <button type="button" onClick={showPreview} className="bg-white border px-4 py-2 rounded text-sm font-semibold">
-            Preview
-          </button>
-          <button type="button" onClick={() => { setPreviewing(true); window.print(); }} className="bg-slate-200 px-4 py-2 rounded text-sm font-semibold">
-            Print / Save as PDF
-          </button>
+          <button type="button" onClick={showPreview} className="bg-white border px-4 py-2 rounded text-sm font-semibold">Preview</button>
+          <button type="button" onClick={() => { setPreviewing(true); window.print(); }} className="bg-slate-200 px-4 py-2 rounded text-sm font-semibold">Print / Save as PDF</button>
           <button type="button" disabled={saving} onClick={save} className="bg-slate-900 text-white px-4 py-2 rounded text-sm font-semibold disabled:opacity-50">
             {saving ? 'Saving…' : 'Save Closing Report'}
           </button>
@@ -239,10 +331,7 @@ export default function CourseClosingReport() {
           <div>
             <h2 className="font-semibold text-slate-900 mb-2">Previous-year attainments</h2>
             <p className="text-xs text-slate-500 mb-2">
-              Stored years: <b>{storedLabel}</b>.
-              {history.has_stored
-                ? ' Historical values were applied automatically where available.'
-                : ' No stored history yet — load dummy previous-year data for this build, or upload later via the snapshots API.'}
+              Previous year used in tables: <b>{prevLabel || '—'}</b>. Stored years: <b>{storedLabel}</b>.
             </p>
             <button type="button" disabled={loadingHistory} onClick={loadPreviousYear}
               className="bg-blue-700 text-white text-sm font-semibold px-4 py-2 rounded disabled:opacity-50">
@@ -251,19 +340,17 @@ export default function CourseClosingReport() {
           </div>
 
           <div>
-            <h2 className="font-semibold text-slate-900 mb-2">3–5. Current attainments &amp; grades</h2>
-            <p className="text-xs text-slate-500 mb-2">Pulled from Students &amp; Marks. Override a cell if needed, then Save.</p>
+            <h2 className="font-semibold text-slate-900 mb-2">{nums.coAtt}–{nums.summary}. Current attainments &amp; grades (auto)</h2>
+            <p className="text-xs text-slate-500 mb-2">Generated from Students &amp; Marks. Override a cell if needed, then Save.</p>
             <div className="overflow-auto border rounded mb-3">
               <table className="w-full text-sm">
                 <thead>
                   <tr className="bg-slate-50">
-                    <th className="p-2 text-left">CO</th>
                     {outcomes.map((co) => <th key={co.co_code} className="p-2">{co.co_code}</th>)}
                   </tr>
                 </thead>
                 <tbody>
                   <tr>
-                    <td className="p-2 font-semibold">{nba}</td>
                     {outcomes.map((co) => (
                       <td key={co.co_code} className="p-1">
                         <input className="w-full border rounded px-2 py-1 text-center text-sm"
@@ -279,13 +366,13 @@ export default function CourseClosingReport() {
               <table className="w-full text-sm">
                 <thead>
                   <tr className="bg-slate-50">
-                    <th className="p-2 text-left">PO/PSO</th>
+                    <th className="p-2 text-left">PO-PSO-Attainment</th>
                     {poKeys.map((k) => <th key={k} className="p-2">{k}</th>)}
                   </tr>
                 </thead>
                 <tbody>
                   <tr>
-                    <td className="p-2 font-semibold">{nba}</td>
+                    <td className="p-2"></td>
                     {poKeys.map((k) => (
                       <td key={k} className="p-1">
                         <input className="w-full border rounded px-2 py-1 text-center text-sm"
@@ -297,15 +384,18 @@ export default function CourseClosingReport() {
                 </tbody>
               </table>
             </div>
+            <p className="text-xs text-slate-500 mb-1">Total students = {totalStudents}</p>
             <div className="overflow-auto border rounded">
               <table className="w-full text-sm">
                 <thead>
                   <tr className="bg-slate-50">
-                    {grades.map((g, i) => <th key={`${g.grade}-${i}`} className="p-2">{g.grade}</th>)}
+                    <th className="p-2"></th>
+                    {grades.map((g, i) => <th key={`${g.grade}-${i}`} className="p-2">Grade {g.grade}</th>)}
                   </tr>
                 </thead>
                 <tbody>
                   <tr>
+                    <td className="p-2 font-semibold">% age of Students</td>
                     {grades.map((g, i) => (
                       <td key={`${g.grade}-${i}`} className="p-1">
                         <input className="w-full border rounded px-2 py-1 text-center text-sm" value={g.pct ?? ''}
@@ -322,7 +412,7 @@ export default function CourseClosingReport() {
             </div>
           </div>
 
-          <BulletEditor title="6. Innovative teaching methods" items={report.teaching_methods || []}
+          <BulletEditor title={`${nums.teach}. Innovative teaching methods`} items={report.teaching_methods || []}
             onChange={(i, v) => updateBullet('teaching_methods', i, v)}
             onAdd={() => patchReport({ teaching_methods: [...(report.teaching_methods || []), ''] })}
             onRemove={(i) => {
@@ -330,7 +420,7 @@ export default function CourseClosingReport() {
               if (cur.length <= 1) return;
               patchReport({ teaching_methods: cur.filter((_, idx) => idx !== i) });
             }} />
-          <BulletEditor title="7. Innovative evaluation strategy" items={report.eval_strategies || []}
+          <BulletEditor title={`${nums.evals}. Innovative evaluation strategy`} items={report.eval_strategies || []}
             onChange={(i, v) => updateBullet('eval_strategies', i, v)}
             onAdd={() => patchReport({ eval_strategies: [...(report.eval_strategies || []), ''] })}
             onRemove={(i) => {
@@ -340,36 +430,27 @@ export default function CourseClosingReport() {
             }} />
 
           <div>
-            <h2 className="font-semibold text-slate-900 mb-2">8. Actions taken — CO attainments</h2>
+            <h2 className="font-semibold text-slate-900 mb-2">{nums.coAct}. Actions taken — CO attainments</h2>
             {(report.co8_rows || []).map((row, idx) => (
               <div key={idx} className="border rounded p-3 mb-2 bg-slate-50 space-y-2">
-                <div className="flex justify-end">
+                <div className="flex justify-between">
+                  <p className="text-sm font-semibold">{row.co || 'CO'}</p>
                   <button type="button" className="text-red-600 text-sm" onClick={() => removeList('co8_rows', idx)}>✕</button>
                 </div>
-                <div className="grid grid-cols-2 gap-2">
-                  <label className="text-xs">CO<input className="w-full border rounded px-2 py-1 text-sm" value={row.co || ''}
-                    onChange={(e) => updateList('co8_rows', idx, 'co', e.target.value)} /></label>
-                  <label className="text-xs">Target<input className="w-full border rounded px-2 py-1 text-sm" value={row.target || ''}
-                    onChange={(e) => updateList('co8_rows', idx, 'target', e.target.value)} /></label>
-                  <label className="text-xs">Attain. {priorYears[0] || 'Y1'}<input className="w-full border rounded px-2 py-1 text-sm" value={row.a_y0 || ''}
-                    onChange={(e) => updateList('co8_rows', idx, 'a_y0', e.target.value)} /></label>
-                  <label className="text-xs">Attain. {priorYears[1] || 'Y2'}<input className="w-full border rounded px-2 py-1 text-sm" value={row.a_y1 || ''}
-                    onChange={(e) => updateList('co8_rows', idx, 'a_y1', e.target.value)} /></label>
-                  <label className="text-xs">Attain. {priorYears[2] || 'Y3'}<input className="w-full border rounded px-2 py-1 text-sm" value={row.a_y2 || ''}
-                    onChange={(e) => updateList('co8_rows', idx, 'a_y2', e.target.value)} /></label>
-                  <label className="text-xs">Attain. {ay}<input className="w-full border rounded px-2 py-1 text-sm" value={row.a_current || ''}
-                    onChange={(e) => updateList('co8_rows', idx, 'a_current', e.target.value)} /></label>
-                </div>
-                <label className="text-xs block">Action taken
+                <label className="text-xs block">Attainments in {prevLabel}
+                  <input className="w-full border rounded px-2 py-1 text-sm" value={row.a_prev || ''}
+                    onChange={(e) => updateList('co8_rows', idx, 'a_prev', e.target.value)} />
+                </label>
+                <label className="text-xs block">Action(s) taken in {currLabel} to improve CO attainment
                   <textarea rows={2} className="w-full border rounded px-2 py-1 text-sm" value={row.action || ''}
                     onChange={(e) => updateList('co8_rows', idx, 'action', e.target.value)} />
                 </label>
-                <label className="text-xs block">Proof
+                <label className="text-xs block">Proof Document(s) attached in Course File
                   <input className="w-full border rounded px-2 py-1 text-sm" value={row.proof || ''}
                     onChange={(e) => updateList('co8_rows', idx, 'proof', e.target.value)} />
                 </label>
                 <div className="flex flex-wrap gap-3 text-xs">
-                  {poKeys.map((k) => (
+                  {actionPoKeys.map((k) => (
                     <label key={k} className="flex items-center gap-1">
                       <input type="checkbox" checked={!!row.checks?.[k]}
                         onChange={(e) => {
@@ -384,48 +465,46 @@ export default function CourseClosingReport() {
               </div>
             ))}
             <button type="button" className="text-xs font-semibold bg-slate-200 px-3 py-1.5 rounded"
-              onClick={() => addList('co8_rows', { co: '', a_y0: '-', a_y1: '-', a_y2: '-', target: '', a_current: '', action: '', proof: '', checks: {} })}>
+              onClick={() => addList('co8_rows', { co: '', a_prev: '', action: '', proof: '', checks: {} })}>
               + Add CO row
             </button>
           </div>
 
           <div>
-            <h2 className="font-semibold text-slate-900 mb-2">9. Actions taken — PO/PSO attainments</h2>
+            <h2 className="font-semibold text-slate-900 mb-2">{nums.poAct}. Actions taken — PO/PSO attainments</h2>
             {poKeys.map((k) => {
-              const row = report.popso9?.[k] || { target: '', attain: '', action: '', proof: '' };
+              const row = report.popso9?.[k] || { a_prev: '', action: '', proof: '' };
               return (
                 <div key={k} className="border rounded p-3 mb-2 bg-slate-50 space-y-2">
                   <p className="text-sm font-semibold">{k}</p>
-                  <div className="grid grid-cols-2 gap-2">
-                    <label className="text-xs">Target<input className="w-full border rounded px-2 py-1 text-sm" value={row.target || ''}
-                      onChange={(e) => patchReport({ popso9: { ...(report.popso9 || {}), [k]: { ...row, target: e.target.value } } })} /></label>
-                    <label className="text-xs">Attainment {ay}<input className="w-full border rounded px-2 py-1 text-sm" value={row.attain || ''}
-                      onChange={(e) => patchReport({ popso9: { ...(report.popso9 || {}), [k]: { ...row, attain: e.target.value } } })} /></label>
-                  </div>
-                  <textarea rows={2} className="w-full border rounded px-2 py-1 text-sm" placeholder="Action(s) taken" value={row.action || ''}
+                  <label className="text-xs block">Attainments in {prevLabel}
+                    <input className="w-full border rounded px-2 py-1 text-sm" value={row.a_prev || ''}
+                      onChange={(e) => patchReport({ popso9: { ...(report.popso9 || {}), [k]: { ...row, a_prev: e.target.value } } })} />
+                  </label>
+                  <textarea rows={2} className="w-full border rounded px-2 py-1 text-sm"
+                    placeholder={`Action(s) taken in ${currLabel} to improve the attainment`}
+                    value={row.action || ''}
                     onChange={(e) => patchReport({ popso9: { ...(report.popso9 || {}), [k]: { ...row, action: e.target.value } } })} />
-                  <input className="w-full border rounded px-2 py-1 text-sm" placeholder="Proof document(s)" value={row.proof || ''}
+                  <input className="w-full border rounded px-2 py-1 text-sm" placeholder="Proof Document(s) attached in Course File"
+                    value={row.proof || ''}
                     onChange={(e) => patchReport({ popso9: { ...(report.popso9 || {}), [k]: { ...row, proof: e.target.value } } })} />
                 </div>
               );
             })}
           </div>
 
-          <ListBlock title="10. Suggestions for improvement" rows={report.suggestions || []}
+          <ListBlock title={`${nums.sug}. Suggestions for improvement`} rows={report.suggestions || []}
             fields={[{ key: 'suggestion', label: 'Suggestion' }, { key: 'co', label: 'Relevance to CO' }, { key: 'popso', label: 'Relevance to PO/PSO' }]}
-            empty={{ suggestion: '', co: '', popso: '' }}
             onChange={(i, k, v) => updateList('suggestions', i, k, v)}
             onAdd={() => addList('suggestions', { suggestion: '', co: '', popso: '' })}
             onRemove={(i) => removeList('suggestions', i)} />
-          <ListBlock title="11. Action taken for weak students" rows={report.weak_actions || []}
+          <ListBlock title={`${nums.weak}. Action taken for weak students`} rows={report.weak_actions || []}
             fields={[{ key: 'action', label: 'Action taken' }, { key: 'proof', label: 'Proof document(s)' }]}
-            empty={{ action: '', proof: '' }}
             onChange={(i, k, v) => updateList('weak_actions', i, k, v)}
             onAdd={() => addList('weak_actions', { action: '', proof: '' })}
             onRemove={(i) => removeList('weak_actions', i)} />
-          <ListBlock title="12. Action taken for bright students" rows={report.bright_actions || []}
+          <ListBlock title={`${nums.bright}. Action taken for bright students`} rows={report.bright_actions || []}
             fields={[{ key: 'action', label: 'Action taken' }, { key: 'proof', label: 'Proof document(s)' }]}
-            empty={{ action: '', proof: '' }}
             onChange={(i, k, v) => updateList('bright_actions', i, k, v)}
             onAdd={() => addList('bright_actions', { action: '', proof: '' })}
             onRemove={(i) => removeList('bright_actions', i)} />
@@ -435,7 +514,7 @@ export default function CourseClosingReport() {
       <div ref={previewRef} className={previewing ? '' : 'hidden print:block'}>
         <A4Document
           watermark={report.watermark_text}
-          revision={`${JSON.stringify(report)}-${JSON.stringify(course)}-${JSON.stringify(history)}`}
+          revision={`${JSON.stringify(report)}-${JSON.stringify(course)}-${JSON.stringify(history)}-${prevLabel}-${totalStudents}`}
         >
           <div className="border-b border-slate-800 pb-3 mb-3">
             <div className="flex items-start justify-between gap-3">
@@ -514,101 +593,88 @@ export default function CourseClosingReport() {
             </tbody>
           </table>
 
-          <h3 className="font-semibold underline mb-1">3. CO Attainments in {ay}:</h3>
-          <table className="w-full border-collapse mb-3">
-            <tbody>
-              <tr>
-                <th className={th}>Course</th>
-                {outcomes.map((co) => <th key={co.co_code} className={th}>{co.co_code}</th>)}
-              </tr>
-              <tr>
-                <td className={`${td} font-semibold text-center`}>{nba}</td>
-                {outcomes.map((co) => <td key={co.co_code} className={`${td} text-center`}>{report.co_current?.[co.co_code] || ''}</td>)}
-              </tr>
-            </tbody>
-          </table>
+          {!lab && (
+            <>
+              <h3 className="font-semibold underline mb-1">3. CO Attainments in {ay}:</h3>
+              <CoAttTable outcomes={outcomes} values={report.co_current} td={td} th={th} />
+              <h3 className="font-semibold underline mb-1">4. PO-PSO Attainments in {ay}:</h3>
+              <PoAttTable poKeys={poKeys} values={report.po_current} td={td} th={th} />
+              <h3 className="font-semibold underline mb-1">5. Summary of Result Analysis: Total students={totalStudents}</h3>
+              <GradeTable grades={grades} td={td} th={th} />
+              <GradeCountChart grades={grades} />
+              <h3 className="font-semibold underline mb-1">6. Innovative Teaching and Learning Method used (if any):</h3>
+              <ul className="list-disc ml-5 mb-3">
+                {(report.teaching_methods || []).filter(Boolean).map((x, i) => <li key={i}>{x}</li>)}
+              </ul>
+              <h3 className="font-semibold underline mb-1">7. Innovative Evaluation Strategy used (If any):</h3>
+              <ul className="list-disc ml-5 mb-3">
+                {(report.eval_strategies || []).filter(Boolean).map((x, i) => <li key={i}>{x}</li>)}
+              </ul>
+            </>
+          )}
 
-          <h3 className="font-semibold underline mb-1">4. PO-PSO Attainments in {ay}:</h3>
-          <table className="w-full border-collapse mb-3">
-            <tbody>
-              <tr>
-                <th className={th}>Course</th>
-                {poKeys.map((k) => <th key={k} className={th}>{k}</th>)}
-              </tr>
-              <tr>
-                <td className={`${td} font-semibold text-center`}>{nba}</td>
-                {poKeys.map((k) => <td key={k} className={`${td} text-center`}>{report.po_current?.[k] || ''}</td>)}
-              </tr>
-            </tbody>
-          </table>
+          {lab && (
+            <>
+              <h3 className="font-semibold underline mb-1">7. CO Attainments in {currLabel}:</h3>
+              <CoAttTable outcomes={outcomes} values={report.co_current} td={td} th={th} />
+              <h3 className="font-semibold underline mb-1">8. PO-PSO Attainments in {currLabel}:</h3>
+              <PoAttTable poKeys={poKeys} values={report.po_current} td={td} th={th} />
+              <h3 className="font-semibold underline mb-1">9. Summary of Result Analysis: Total students={totalStudents}</h3>
+              <GradeTable grades={grades} td={td} th={th} />
+              <GradeCountChart grades={grades} />
+              <h3 className="font-semibold underline mb-1">10. Innovative Teaching and Learning Method used (if any):</h3>
+              <ul className="list-disc ml-5 mb-3">
+                {(report.teaching_methods || []).filter(Boolean).map((x, i) => <li key={i}>{x}</li>)}
+              </ul>
+              <h3 className="font-semibold underline mb-1">11. Innovative Evaluation Strategy used (If any):</h3>
+              <ul className="list-disc ml-5 mb-3">
+                {(report.eval_strategies || []).filter(Boolean).map((x, i) => <li key={i}>{x}</li>)}
+              </ul>
+            </>
+          )}
 
-          <h3 className="font-semibold underline mb-1">5. Summary of Result Analysis:</h3>
-          <table className="w-full border-collapse mb-3">
-            <tbody>
-              <tr>
-                {grades.map((g, i) => <th key={`${g.grade}-h-${i}`} className={th}>Grade {g.grade}</th>)}
-              </tr>
-              <tr>
-                {grades.map((g, i) => <td key={`${g.grade}-v-${i}`} className={`${td} text-center`}>{g.pct || ''}</td>)}
-              </tr>
-            </tbody>
-          </table>
-
-          <h3 className="font-semibold underline mb-1">6. Innovative Teaching and Learning Method used (if any):</h3>
-          <ul className="list-disc ml-5 mb-3">
-            {(report.teaching_methods || []).filter(Boolean).map((x, i) => <li key={i}>{x}</li>)}
-          </ul>
-
-          <h3 className="font-semibold underline mb-1">7. Innovative Evaluation Strategy used (If any):</h3>
-          <ul className="list-disc ml-5 mb-3">
-            {(report.eval_strategies || []).filter(Boolean).map((x, i) => <li key={i}>{x}</li>)}
-          </ul>
-
-          <h3 className="font-semibold underline mb-1">8. Actions Taken for Improvement in CO Attainments:</h3>
-          <table className="w-full border-collapse mb-2 text-[9px]">
+          <h3 className="font-semibold underline mb-1">{nums.coAct}. Actions Taken for Improvement in CO Attainments:</h3>
+          <table className="w-full border-collapse mb-3 text-[10px] cr-co-actions">
             <thead>
               <tr>
                 <th className={th}>COs</th>
-                <th className={th}>Attain. {shortYear(priorYears[0])}</th>
-                <th className={th}>Attain. {shortYear(priorYears[1])}</th>
-                <th className={th}>Attain. {shortYear(priorYears[2])}</th>
-                <th className={th}>Target {ay}</th>
-                <th className={th}>Attain. {ay}</th>
-                <th className={th}>Action(s) taken</th>
-                <th className={th}>Proof Doc(s)</th>
-                {poKeys.map((k) => <th key={k} className={th}>{k}</th>)}
+                <th className={th}>Attainments in {prevLabel}</th>
+                <th className={th}>Action(s) taken in {currLabel} to improve CO attainment</th>
+                <th className={th}>Proof Document(s) attached in Course File</th>
+                {actionPoKeys.map((k) => {
+                  const [pre, num] = poHeadParts(k);
+                  return (
+                    <th key={k} className={`${th} cr-po-head`}>
+                      <div>{pre}</div>
+                      <div>{num}</div>
+                    </th>
+                  );
+                })}
               </tr>
             </thead>
             <tbody>
               {(report.co8_rows || []).map((row, idx) => (
                 <tr key={idx}>
                   <td className={`${td} font-semibold text-center`}>{row.co}</td>
-                  <td className={`${td} text-center`}>{row.a_y0}</td>
-                  <td className={`${td} text-center`}>{row.a_y1}</td>
-                  <td className={`${td} text-center`}>{row.a_y2}</td>
-                  <td className={`${td} text-center`}>{row.target}</td>
-                  <td className={`${td} text-center`}>{row.a_current}</td>
-                  <td className={td}>{row.action}</td>
-                  <td className={td}>{row.proof}</td>
-                  {poKeys.map((k) => <td key={k} className={`${td} text-center font-bold`}>{row.checks?.[k] ? 'Y' : ''}</td>)}
+                  <td className={`${td} text-center`}>{row.a_prev || ''}</td>
+                  <td className={`${td} text-left`}>{row.action || ''}</td>
+                  <td className={`${td} text-center`}>{row.proof || ''}</td>
+                  {actionPoKeys.map((k) => (
+                    <td key={k} className={`${td} text-center cr-tick`}>{row.checks?.[k] ? '✓' : ''}</td>
+                  ))}
                 </tr>
               ))}
             </tbody>
           </table>
-          <p className="text-[9px] text-slate-600 mb-3">
-            <b>NOTE:</b> Target Attainment of a CO for current AY = Average of Attainments in previous 3 AYs.
-            If not available for previous three consecutive years, target is 1.8.
-          </p>
 
-          <h3 className="font-semibold underline mb-1">9. Actions Taken for Improvement in PO-PSO Attainments:</h3>
+          <h3 className="font-semibold underline mb-1">{nums.poAct}. Actions Taken for Improvement in PO-PSO Attainments:</h3>
           <table className="w-full border-collapse mb-3">
             <thead>
               <tr>
                 <th className={th}>PO-PSOs</th>
-                <th className={th}>Target Attainment</th>
-                <th className={th}>Attainment {ay}</th>
-                <th className={th}>Action(s) taken</th>
-                <th className={th}>Proof Document(s)</th>
+                <th className={th}>Attainments in {prevLabel}</th>
+                <th className={th}>Action(s) taken in {currLabel} to improve the attainment</th>
+                <th className={th}>Proof Document(s) attached in Course File</th>
               </tr>
             </thead>
             <tbody>
@@ -617,43 +683,38 @@ export default function CourseClosingReport() {
                 return (
                   <tr key={k}>
                     <td className={`${td} font-semibold text-center`}>{k}</td>
-                    <td className={`${td} text-center`}>{row.target}</td>
-                    <td className={`${td} text-center`}>{row.attain}</td>
-                    <td className={td}>{row.action}</td>
-                    <td className={td}>{row.proof}</td>
+                    <td className={`${td} text-center`}>{row.a_prev || ''}</td>
+                    <td className={td}>{row.action || ''}</td>
+                    <td className={td}>{row.proof || ''}</td>
                   </tr>
                 );
               })}
             </tbody>
           </table>
 
-          <h3 className="font-semibold underline mb-1">10. Suggestions for Improvement:</h3>
-          {!suggestionsFilled ? (
-            <p className="mb-3">NIL</p>
-          ) : (
-            <table className="w-full border-collapse mb-3">
-              <thead>
-                <tr>
-                  <th className={`${th} w-[8%]`}>SN</th>
-                  <th className={th}>Suggestion</th>
-                  <th className={th}>Relevance to CO</th>
-                  <th className={th}>Relevance to PO/PSO</th>
+          <h3 className="font-semibold underline mb-1">{nums.sug}. Suggestions for Improvement:</h3>
+          <table className="w-full border-collapse mb-3">
+            <thead>
+              <tr>
+                <th className={`${th} w-[8%]`}>SN</th>
+                <th className={th}>Suggestion</th>
+                <th className={th}>Relevance to CO</th>
+                <th className={th}>Relevance to PO/PSO</th>
+              </tr>
+            </thead>
+            <tbody>
+              {(suggestionsFilled.length ? suggestionsFilled : [{ suggestion: '', co: '', popso: '' }]).map((s, i) => (
+                <tr key={i}>
+                  <td className={`${td} text-center`}>{i + 1}</td>
+                  <td className={td}>{s.suggestion || ''}</td>
+                  <td className={td}>{s.co || ''}</td>
+                  <td className={td}>{s.popso || ''}</td>
                 </tr>
-              </thead>
-              <tbody>
-                {(report.suggestions || []).map((s, i) => (
-                  <tr key={i}>
-                    <td className={`${td} text-center`}>{i + 1}</td>
-                    <td className={td}>{s.suggestion || ''}</td>
-                    <td className={td}>{s.co || ''}</td>
-                    <td className={td}>{s.popso || ''}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
+              ))}
+            </tbody>
+          </table>
 
-          <h3 className="font-semibold underline mb-1">11. Action taken for weak students:</h3>
+          <h3 className="font-semibold underline mb-1">{nums.weak}. Action taken for weak students:</h3>
           <table className="w-full border-collapse mb-3">
             <thead>
               <tr>
@@ -671,7 +732,7 @@ export default function CourseClosingReport() {
             </tbody>
           </table>
 
-          <h3 className="font-semibold underline mb-1">12. Action taken for bright students:</h3>
+          <h3 className="font-semibold underline mb-1">{nums.bright}. Action taken for bright students:</h3>
           <table className="w-full border-collapse mb-3">
             <thead>
               <tr>
@@ -696,6 +757,55 @@ export default function CourseClosingReport() {
         </A4Document>
       </div>
     </div>
+  );
+}
+
+function CoAttTable({ outcomes, values, td, th }) {
+  return (
+    <table className="w-full border-collapse mb-3">
+      <tbody>
+        <tr>
+          {outcomes.map((co) => <th key={co.co_code} className={th}>{co.co_code}</th>)}
+        </tr>
+        <tr>
+          {outcomes.map((co) => <td key={co.co_code} className={`${td} text-center`}>{values?.[co.co_code] || ''}</td>)}
+        </tr>
+      </tbody>
+    </table>
+  );
+}
+
+function PoAttTable({ poKeys, values, td, th }) {
+  return (
+    <table className="w-full border-collapse mb-3">
+      <tbody>
+        <tr>
+          <th className={th}>PO-PSO-<br />Attainment</th>
+          {poKeys.map((k) => <th key={k} className={th}>{k}</th>)}
+        </tr>
+        <tr>
+          <td className={td}></td>
+          {poKeys.map((k) => <td key={k} className={`${td} text-center`}>{values?.[k] || ''}</td>)}
+        </tr>
+      </tbody>
+    </table>
+  );
+}
+
+function GradeTable({ grades, td, th }) {
+  return (
+    <table className="w-full border-collapse mb-3">
+      <tbody>
+        <tr>
+          <th className={th}></th>
+          {(grades || []).map((g, i) => <th key={`${g.grade}-h-${i}`} className={th}>Grade {g.grade}</th>)}
+        </tr>
+        <tr>
+          <td className={`${td} font-semibold`}>% age of Students</td>
+          {(grades || []).map((g, i) => <td key={`${g.grade}-v-${i}`} className={`${td} text-center`}>{g.pct || ''}</td>)}
+        </tr>
+      </tbody>
+    </table>
   );
 }
 
@@ -725,13 +835,8 @@ function ListBlock({ title, rows, fields, onChange, onAdd, onRemove }) {
             <button type="button" className="text-red-600 text-sm" onClick={() => onRemove(idx)}>✕</button>
           </div>
           {fields.map((f) => (
-            f.type === 'textarea' ? (
-              <textarea key={f.key} rows={2} className="w-full border rounded px-2 py-1 text-sm mb-1" placeholder={f.label}
-                value={row[f.key] || ''} onChange={(e) => onChange(idx, f.key, e.target.value)} />
-            ) : (
-              <input key={f.key} className="w-full border rounded px-2 py-1 text-sm mb-1" placeholder={f.label}
-                value={row[f.key] || ''} onChange={(e) => onChange(idx, f.key, e.target.value)} />
-            )
+            <input key={f.key} className="w-full border rounded px-2 py-1 text-sm mb-1" placeholder={f.label}
+              value={row[f.key] || ''} onChange={(e) => onChange(idx, f.key, e.target.value)} />
           ))}
         </div>
       ))}

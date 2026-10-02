@@ -30,7 +30,7 @@ export default function CourseSubnav({ courseId }) {
         to={`/courses/${courseId}/assessment-tools`}
         className={({ isActive }) => `${link} ${isActive ? active : idle}`}
       >
-        Assessment Tools
+        Attainment Sheet
       </NavLink>
       <NavLink
         to={`/courses/${courseId}/closing-report`}

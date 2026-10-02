@@ -5,7 +5,7 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 from courses.access import faculty_owns_course
 from courses.models import Course
-from .defaults import ensure_sheet_blocks
+from .defaults import ensure_lab_blocks, ensure_sheet_blocks
 from .models import Assessment, Student, StudentMark, GradeBand
 from .serializers import (
     AssessmentSerializer, StudentSerializer, StudentMarkSerializer, GradeBandSerializer,
@@ -40,8 +40,13 @@ class AssessmentViewSet(viewsets.ModelViewSet):
             return Response({'error': 'Course not found.'}, status=404)
         if request.user.is_faculty_role and course.faculty_id != request.user.id:
             return Response({'error': 'Not allowed.'}, status=403)
-        created = ensure_sheet_blocks(course)
-        assessments = Assessment.objects.filter(course=course, assessment_type__in=['T1', 'T2', 'T3', 'TA', 'FEEDBACK'])
+        if getattr(course, 'is_lab', False) or getattr(course, 'course_kind', '') == 'LAB':
+            created = ensure_lab_blocks(course)
+            types = ['MID', 'END', 'D2D']
+        else:
+            created = ensure_sheet_blocks(course)
+            types = ['T1', 'T2', 'T3', 'TA', 'FEEDBACK']
+        assessments = Assessment.objects.filter(course=course, assessment_type__in=types)
         return Response({
             'created': created,
             'assessments': AssessmentSerializer(assessments, many=True).data,

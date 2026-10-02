@@ -4,7 +4,7 @@ from rest_framework.views import APIView
 
 from courses.models import Course
 from courses.serializers import CourseSerializer
-from .models import AssessmentToolsDocument, merge_synced_tools, tools_from_assessments
+from .models import AssessmentToolsDocument, default_co_rows, default_course_heading, default_title, tools_are_co_rows
 from .serializers import AssessmentToolsDocumentSerializer
 
 
@@ -23,21 +23,22 @@ class AssessmentToolsDetailView(APIView):
         if not course:
             return Response({'error': 'Course not found.'}, status=404)
         doc, created = AssessmentToolsDocument.objects.get_or_create(course=course)
-        generated = tools_from_assessments(course)
-        if generated:
-            synced = merge_synced_tools(generated, doc.tools)
-            if synced != doc.tools:
-                doc.tools = synced
-                if created:
-                    doc.apply_defaults()
-                doc.save()
-        elif created or not doc.tools:
-            doc.apply_defaults()
+        rows = default_co_rows(course, doc.tools if tools_are_co_rows(doc.tools) else None)
+        dirty = created
+        if rows != (doc.tools or []):
+            doc.tools = rows
+            dirty = True
+        if not doc.doc_title or doc.doc_title in ('Assessment Tools',):
+            doc.doc_title = default_title(course)
+            dirty = True
+        if not doc.sub_heading or doc.sub_heading.startswith('Cognitive level'):
+            doc.sub_heading = default_course_heading(course)
+            dirty = True
+        if dirty:
             doc.save()
         return Response({
             'document': AssessmentToolsDocumentSerializer(doc).data,
             'course': CourseSerializer(course).data,
-            'synced_from_marks': bool(generated),
         })
 
     def patch(self, request, course_id):

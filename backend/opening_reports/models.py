@@ -2,8 +2,7 @@ from copy import deepcopy
 from django.db import models
 from courses.models import Course
 from .defaults import (
-    DEFAULT_BRIGHT, DEFAULT_EFFORTS, DEFAULT_EVAL, DEFAULT_GUIDELINES,
-    DEFAULT_IMPACT, DEFAULT_TEACHING, DEFAULT_WEAK,
+    DEFAULT_BRIGHT, DEFAULT_EVAL, DEFAULT_TEACHING, DEFAULT_WEAK,
 )
 
 
@@ -21,6 +20,7 @@ class OpeningReport(models.Model):
 
     co_actions = models.JSONField(default=dict, blank=True)
     co_targets = models.JSONField(default=dict, blank=True)
+    co_prev_years = models.JSONField(default=dict, blank=True)
 
     teaching_methods = models.JSONField(default=list, blank=True)
     teaching_other = models.CharField(max_length=500, blank=True)
@@ -30,6 +30,7 @@ class OpeningReport(models.Model):
     bright_other = models.CharField(max_length=500, blank=True)
     eval_strategies = models.JSONField(default=list, blank=True)
     eval_other = models.CharField(max_length=500, blank=True)
+    module_coordinator = models.TextField(blank=True)
 
     guidelines = models.JSONField(default=list, blank=True)
     efforts_rows = models.JSONField(default=list, blank=True)
@@ -49,12 +50,6 @@ class OpeningReport(models.Model):
             self.bright_strategies = deepcopy(DEFAULT_BRIGHT)
         if not self.eval_strategies:
             self.eval_strategies = deepcopy(DEFAULT_EVAL)
-        if not self.guidelines:
-            self.guidelines = deepcopy(DEFAULT_GUIDELINES)
-        if not self.efforts_rows:
-            self.efforts_rows = deepcopy(DEFAULT_EFFORTS)
-        if not self.impact_points:
-            self.impact_points = deepcopy(DEFAULT_IMPACT)
         if not self.co_actions:
             self.co_actions = {
                 co.co_code: 'Include more practice questions'

@@ -279,7 +279,7 @@ def student_block_total_from_index(assessment, student_id, marks_idx, questions)
 
 
 def build_sheet(course):
-    """Full attainment + result payload for the Students & Marks UI (one marks query)."""
+    """Full attainment + result payload for the Attainment Sheet (one marks query)."""
     assessments = list(
         Assessment.objects.filter(course=course, assessment_type__in=SHEET_TYPES)
         .prefetch_related('questions')
@@ -348,6 +348,7 @@ def build_sheet(course):
         mapping_avg[po] = _f(map_sum / map_n) if map_n else None
 
     exam_summaries = []
+    exam_pages = []
     for typ in SHEET_TYPES:
         a = blocks.get(typ)
         if not a:
@@ -370,6 +371,66 @@ def build_sheet(course):
             'total_students': total,
             'appeared': appeared,
             'use_ceiling': a.use_ceiling,
+            'cos': co_stats,
+        })
+
+        cos_on_page = [co for co in outcomes if _questions_for_co(qs, co)]
+        student_rows = []
+        for i, st in enumerate(students):
+            marks = {}
+            total_m = Decimal('0')
+            any_m = False
+            for q in qs:
+                val = marks_idx.get((a.id, st.id, q.id))
+                if val is None:
+                    marks[str(q.id)] = None
+                else:
+                    marks[str(q.id)] = _f(val)
+                    total_m += Decimal(val)
+                    any_m = True
+            co_pct = {}
+            for co in cos_on_page:
+                cqs = _questions_for_co(qs, co)
+                max_sum = sum((q.max_marks or 0) for q in cqs)
+                if not max_sum:
+                    co_pct[co.co_code] = None
+                    continue
+                sum_m = Decimal('0')
+                all_num = True
+                any_e = False
+                for q in cqs:
+                    val = marks_idx.get((a.id, st.id, q.id))
+                    if val is None:
+                        all_num = False
+                    else:
+                        sum_m += Decimal(val)
+                        any_e = True
+                co_pct[co.co_code] = _f((sum_m / Decimal(max_sum)) * 100, 1) if all_num and any_e else None
+            student_rows.append({
+                'sno': i + 1,
+                'enrol': st.roll_number,
+                'name': st.name,
+                'marks': marks,
+                'total': _f(total_m, 1) if any_m else None,
+                'co_pct': co_pct,
+            })
+        exam_pages.append({
+            'type': typ,
+            'tag': 'Feedback' if typ == 'FEEDBACK' else typ,
+            'label': a.display_label(),
+            'target_percent': a.target_percent,
+            'total_students': total,
+            'appeared': appeared,
+            'questions': [
+                {
+                    'id': q.id,
+                    'label': q.label,
+                    'max': _f(q.max_marks),
+                    'co_code': next((co.co_code for co in outcomes if co.id == q.course_outcome_id), ''),
+                }
+                for q in qs
+            ],
+            'students': student_rows,
             'cos': co_stats,
         })
 
@@ -430,6 +491,7 @@ def build_sheet(course):
         'po_attainment': po_attainment,
         'mapping_avg': mapping_avg,
         'exam_summaries': exam_summaries,
+        'exam_pages': exam_pages,
         'results': results,
         'grade_distribution': grade_distribution,
     }
