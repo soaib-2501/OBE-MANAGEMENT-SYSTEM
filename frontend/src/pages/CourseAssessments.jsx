@@ -4,6 +4,7 @@ import api from '../api/client';
 import CourseSubnav from '../components/CourseSubnav';
 import SheetPreview from '../components/SheetPreview';
 import LabSheetPreview from '../components/LabSheetPreview';
+import ExitSurveySheet from '../components/ExitSurveySheet';
 import { parseExamMetaFromRows, parseMarksFromRows, parseRosterFromRows, readSpreadsheetRows } from '../utils/excelImport';
 import { coursesListLabel, coursesListPath, isLabCourse } from '../utils/offering';
 
@@ -12,17 +13,17 @@ const THEORY_BLOCKS = [
   { key: 'T2', label: 'T2' },
   { key: 'T3', label: 'T3' },
   { key: 'TA', label: 'TA / Project' },
-  { key: 'FEEDBACK', label: 'CO Feedback' },
+  { key: 'FEEDBACK', label: 'Exit Survey' },
 ];
 
 const LAB_BLOCKS = [
   { key: 'MID', label: 'Mid Sem' },
   { key: 'END', label: 'End Sem' },
   { key: 'D2D', label: 'D2D' },
+  { key: 'FEEDBACK', label: 'Exit Survey' },
 ];
 
 const LAB_PLACEHOLDER_TABS = [
-  { id: 'exit_survey', label: 'Exit Survey' },
   { id: 'co_attainment', label: 'CO Attainment' },
 ];
 
@@ -191,7 +192,8 @@ export default function CourseAssessments() {
   const [uploading, setUploading] = useState(false);
 
   const outcomes = course?.outcomes ?? [];
-  const block = assessments.find((a) => a.assessment_type === tab) || null;
+  const isExitSurvey = tab === 'FEEDBACK' || tab === 'exit_survey';
+  const block = assessments.find((a) => a.assessment_type === (isExitSurvey ? 'FEEDBACK' : tab)) || null;
 
   const [loading, setLoading] = useState(true);
 
@@ -220,7 +222,9 @@ export default function CourseAssessments() {
         seen.add(a.assessment_type);
         unique.push(a);
       }
-      if (unique.length < wanted.length) {
+      const fb = unique.find((a) => a.assessment_type === 'FEEDBACK');
+      const cOutcomes = courseRes.data?.outcomes || [];
+      if (unique.length < wanted.length || (fb && (fb.questions?.length || 0) < cOutcomes.length)) {
         await api.post('/assessments/ensure/', { course: Number(id) });
         const refreshed = list((await api.get(`/assessments/?course=${id}`)).data)
           .filter((a) => wanted.some((b) => b.key === a.assessment_type));
@@ -455,11 +459,11 @@ export default function CourseAssessments() {
     setStatus('');
     setUploading(true);
     try {
-      const rows = await readSpreadsheetRows(file, { tab });
+      const rows = await readSpreadsheetRows(file, { tab: isExitSurvey ? 'FEEDBACK' : tab });
       const parsed = parseMarksFromRows(rows, block.questions || []);
       const meta = parseExamMetaFromRows(rows);
       if (!parsed.students.length && !Object.keys(parsed.marksByEnrol).length) {
-        setError('Could not read marks. Use columns Rollno / Enrol No, Name, Batch, then the mark columns for this tab.');
+        setError('Could not read marks. Use columns Rollno / Enrol No / Email Address, Name, Class/Batch, then the mark columns for this tab.');
         return;
       }
       let roster = students;
@@ -469,7 +473,7 @@ export default function CourseAssessments() {
       if (payload.length) {
         const res = await api.post('/assessments/students/bulk/', {
           course: Number(id),
-          mode: isLabCourse(course) ? 'match_only' : 'replace_order',
+          mode: 'append',
           students: payload,
         });
         roster = res.data.students || students;
@@ -504,7 +508,7 @@ export default function CourseAssessments() {
         });
         await loadSheet();
       }
-      setStatus(`Uploaded ${filled} marks from Excel${payload.some((s) => s.batch) ? ' (batch mapped by roll number)' : ''}. Names stay in roster order.`);
+      setStatus(`Uploaded ${filled} marks from Excel${isExitSurvey ? ' for Exit Survey' : ''}${payload.some((s) => s.batch) ? ' (batch/class mapped)' : ''}.`);
     } catch (err) {
       setError(formatError(err, 'Could not import marks from Excel.'));
     } finally {
@@ -618,7 +622,7 @@ export default function CourseAssessments() {
         </section>
       )}
 
-      {!lab && THEORY_BLOCKS.some((b) => b.key === tab) && block && (
+      {!lab && !isExitSurvey && THEORY_BLOCKS.some((b) => b.key === tab) && block && (
         <div className="space-y-4">
           <div className="no-print space-y-4">
           <section className="bg-white shadow rounded-lg p-6">
@@ -749,7 +753,7 @@ export default function CourseAssessments() {
         </div>
       )}
 
-      {lab && LAB_BLOCKS.some((b) => b.key === tab) && block && (
+      {lab && !isExitSurvey && LAB_BLOCKS.some((b) => b.key === tab) && block && (
         <div className="space-y-4">
           <div className="no-print space-y-4">
             <section className="bg-white shadow rounded-lg p-6">
@@ -893,6 +897,26 @@ export default function CourseAssessments() {
             onToggle={() => setPreviewing((v) => !v)}
           />
         </div>
+      )}
+
+      {isExitSurvey && block && (
+        <ExitSurveySheet
+          course={course}
+          students={students}
+          block={block}
+          marksGrid={marksGrid}
+          outcomes={outcomes}
+          onMarkChange={(studentId, questionId, value) => {
+            setMarksGrid((prev) => ({ ...prev, [`${studentId}-${questionId}`]: value }));
+          }}
+          onStudentBatchChange={(studentId, batch) => {
+            setStudents((prev) => prev.map((s) => (s.id === studentId ? { ...s, batch } : s)));
+          }}
+          saving={saving}
+          uploading={uploading}
+          onSave={saveMarks}
+          onUploadExcel={importMarksExcel}
+        />
       )}
 
       {lab && LAB_PLACEHOLDER_TABS.some((t) => t.id === tab) && (

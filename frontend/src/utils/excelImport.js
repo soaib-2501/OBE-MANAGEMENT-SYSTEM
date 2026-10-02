@@ -29,7 +29,11 @@ function isEnrolHeader(key) {
 }
 
 function isBatchHeader(key) {
-  return ['batch', 'section', 'grp', 'group', 'sec'].includes(key);
+  return ['batch', 'section', 'grp', 'group', 'sec', 'class'].includes(key);
+}
+
+function isEmailHeader(key) {
+  return ['email', 'emailaddress', 'mail', 'mailid'].includes(key);
 }
 
 function isNameHeader(key) {
@@ -42,19 +46,24 @@ function isGroupHeader(key) {
 
 function isSkipMarkHeader(key, raw) {
   if (!key) return true;
-  if (isSnoHeader(key) || isEnrolHeader(key) || isNameHeader(key) || isBatchHeader(key)) return true;
+  if (isSnoHeader(key) || isEnrolHeader(key) || isNameHeader(key) || isBatchHeader(key) || isEmailHeader(key)) return true;
   if (isGroupHeader(key)) return true;
   if (key.startsWith('total')) return true;
   if (key.includes('percent') || key.includes('pct')) return true;
   if (/%\s*$/.test(cellStr(raw))) return true;
   if (/^co\d+$/.test(key)) return true;
-  if (['timestamp', 'email', 'emailaddress', 'grade'].includes(key)) return true;
+  if (['timestamp', 'grade'].includes(key)) return true;
   if (key.startsWith('labtest') || key.startsWith('attainment')) return true;
   return false;
 }
 
 function extractCoNum(value) {
-  const m = cellStr(value).match(/co\s*(\d+)/i);
+  const s = cellStr(value);
+  // Match rubric format like [C175.1 or [18B15CI121.1 or [.1
+  const mDot = s.match(/\[[A-Za-z0-9_/-]*\.(\d+)/);
+  if (mDot) return Number(mDot[1]);
+  // Match [CO1 or CO1
+  const m = s.match(/\[?\s*co\s*(\d+)/i);
   return m ? Number(m[1]) : null;
 }
 
@@ -98,7 +107,8 @@ const SHEET_HINTS = {
   T2: ['t2', 'exam t2', 'exam: t2'],
   T3: ['t3', 'exam t3', 'exam: t3'],
   TA: ['ta', 'ta marks', 'assignment', 'project'],
-  FEEDBACK: ['course exit feedback', 'exit feedback', 'feedback', '[1]exit feedback'],
+  FEEDBACK: ['exit survey', 'course exit feedback', 'exit feedback', 'feedback', '[1]exit feedback', 'form responses 1', 'sheet1'],
+  exit_survey: ['exit survey', 'course exit feedback', 'exit feedback', 'feedback', '[1]exit feedback', 'form responses 1', 'sheet1'],
   roster: ['t1', 'roster', 'students'],
   MID: ['midsem', 'mid sem', 'midterm', 'mid term', 'mid'],
   END: ['endsem', 'end sem', 'endterm', 'end term', 'end'],
@@ -224,16 +234,17 @@ export function parseExamMetaFromRows(aoa) {
 }
 
 function detectMarksHeader(rows) {
-  const scan = Math.min(rows.length, 15);
+  const scan = Math.min(rows.length, 25);
   let fallback = null;
   for (let i = 0; i < scan; i += 1) {
     const keys = (rows[i] || []).map((c) => headerKey(c));
     const enrolIdx = keys.findIndex(isEnrolHeader);
     const nameIdx = keys.findIndex(isNameHeader);
     const batchIdx = keys.findIndex(isBatchHeader);
-    if (enrolIdx < 0) continue;
-    const found = { headerIndex: i, enrolIdx, nameIdx, batchIdx, headers: rows[i] || [] };
-    if (nameIdx >= 0) return found;
+    const emailIdx = keys.findIndex(isEmailHeader);
+    if (enrolIdx < 0 && emailIdx < 0) continue;
+    const found = { headerIndex: i, enrolIdx, nameIdx, batchIdx, emailIdx, headers: rows[i] || [] };
+    if (nameIdx >= 0 || enrolIdx >= 0) return found;
     if (!fallback) fallback = found;
   }
   return fallback;
@@ -247,8 +258,8 @@ function questionMatchesHeader(q, raw) {
   const headerMax = extractMaxMarks(raw);
   const qCo = extractCoNum(`${q.label || ''} ${q.key || ''}`);
   const qMax = Number(q.max_marks);
-  if (headerCo != null && qCo != null && headerCo === qCo && headerMax != null && headerMax === qMax) {
-    return true;
+  if (headerCo != null && qCo != null && headerCo === qCo) {
+    if (headerMax == null || headerMax === qMax) return true;
   }
   return false;
 }
@@ -270,7 +281,7 @@ export function parseMarksFromRows(aoa, questions) {
   const usedQuestion = new Set();
   const colToQuestion = new Map();
   const skipIdentity = (col) => (
-    col === header.enrolIdx || col === header.nameIdx || col === header.batchIdx
+    col === header.enrolIdx || col === header.nameIdx || col === header.batchIdx || col === header.emailIdx
   );
   (header.headers || []).forEach((raw, col) => {
     if (skipIdentity(col)) return;
@@ -305,7 +316,12 @@ export function parseMarksFromRows(aoa, questions) {
 
   for (let i = header.headerIndex + 1; i < rows.length; i += 1) {
     const row = rows[i] || [];
-    const roll_number = cellEnrol(row[header.enrolIdx]);
+    let roll_number = header.enrolIdx >= 0 ? cellEnrol(row[header.enrolIdx]) : '';
+    if (!roll_number && header.emailIdx >= 0) {
+      const email = cellStr(row[header.emailIdx]);
+      const m = email.match(/^([a-zA-Z0-9]+)@/);
+      if (m) roll_number = m[1];
+    }
     const name = header.nameIdx >= 0 ? cellStr(row[header.nameIdx]) : '';
     const batch = header.batchIdx >= 0 ? cellStr(row[header.batchIdx]) : '';
     if (!roll_number) continue;

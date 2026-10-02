@@ -3,7 +3,7 @@ from courses.models import Course
 
 
 SHEET_TYPES = ('T1', 'T2', 'T3', 'TA', 'FEEDBACK')
-LAB_SHEET_TYPES = ('MID', 'END', 'D2D')
+LAB_SHEET_TYPES = ('MID', 'END', 'D2D', 'FEEDBACK')
 
 
 class Assessment(models.Model):
@@ -13,7 +13,7 @@ class Assessment(models.Model):
         T2 = 'T2', 'T2'
         T3 = 'T3', 'T3'
         TA = 'TA', 'TA (Attendance / Project / Assignment)'
-        FEEDBACK = 'FEEDBACK', 'Course Exit Feedback'
+        FEEDBACK = 'FEEDBACK', 'Exit Survey'
         ASSIGNMENT = 'ASSIGNMENT', 'Assignment'
         ATTENDANCE = 'ATTENDANCE', 'Attendance'
         PROJECT = 'PROJECT', 'Project'
@@ -42,7 +42,7 @@ class Assessment(models.Model):
             'T2': 'Exam: T2',
             'T3': 'Exam: T3',
             'TA': 'TA Marks',
-            'FEEDBACK': 'Course Exit Feedback',
+            'FEEDBACK': 'Exit Survey',
             'MID': 'Mid Term',
             'END': 'End Term',
             'D2D': 'D2D',

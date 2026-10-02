@@ -6,7 +6,7 @@ DEFAULT_LABELS = {
     'T2': 'Exam: T2',
     'T3': 'Exam: T3',
     'TA': 'TA Marks',
-    'FEEDBACK': 'Course Exit Feedback',
+    'FEEDBACK': 'Exit Survey',
     'MID': 'Mid Term',
     'END': 'End Term',
     'D2D': 'D2D',
@@ -116,6 +116,19 @@ def ensure_blocks(course, types):
                     group=q.get('group') or '',
                 )
             created.append(typ)
+        elif typ == 'FEEDBACK' and outcomes:
+            existing_co_ids = set(obj.questions.values_list('course_outcome_id', flat=True))
+            last_order = obj.questions.count()
+            for i, co in enumerate(outcomes):
+                if co.id not in existing_co_ids:
+                    AssessmentQuestion.objects.create(
+                        assessment=obj,
+                        key=f'CO{i + 1}',
+                        label=f'{co.co_code} rating',
+                        max_marks=5,
+                        course_outcome_id=co.id,
+                        order=last_order + i,
+                    )
         total = sum(float(q.max_marks) for q in obj.questions.all())
         if total:
             obj.max_marks = max(1, int(round(total)))
