@@ -4,7 +4,6 @@ import api from '../api/client';
 import CourseSubnav from '../components/CourseSubnav';
 import { coordinatorName, coursesListLabel, coursesListPath, teachingFacultyName } from '../utils/offering';
 import A4Document from '../components/A4Document';
-import { coursesListLabel, coursesListPath } from '../utils/offering';
 
 function rowsFrom(doc, outcomes) {
   const saved = {};
@@ -83,15 +82,8 @@ export default function CourseAssessmentTools() {
 
   const coordinator = coordinatorName(course);
   const facultyPerson = teachingFacultyName(course);
-  const ay = course.academic_year;
   const td = 'border border-slate-800 px-2 py-1';
   const th = 'border border-slate-800 px-2 py-1 bg-slate-50';
-
-  function coLevelText(coCode) {
-    const co = outcomes.find((o) => o.co_code === coCode);
-    if (!co) return coCode || '—';
-    return `${co.co_code}, ${CO_LEVEL_LABELS[co.cognitive_level] || co.cognitive_level}`;
-  }
 
   return (
     <div className="p-8 max-w-6xl mx-auto print:p-0 print:max-w-none">
@@ -121,77 +113,6 @@ export default function CourseAssessmentTools() {
         </div>
 
         <section className="bg-white shadow rounded-lg p-6 mb-6 space-y-6">
-          <div>
-            <h2 className="font-semibold text-slate-900 mb-1">Synced from Course Description</h2>
-            <p className="text-xs text-slate-500 mb-3">
-              Programme, session, course, NBA code, coordinator and CO Bloom levels come from this offering only.
-              Edit COs on the Course Description tab.
-            </p>
-            <div className="grid grid-cols-2 gap-2 text-sm bg-slate-50 rounded p-3 border">
-              <p><span className="text-slate-500">Academic year:</span> {ay}</p>
-              <p><span className="text-slate-500">Semester:</span> {semesterType}</p>
-              <p className="col-span-2"><span className="text-slate-500">Programme:</span> {course.program_name || '—'}</p>
-              <p className="col-span-2"><span className="text-slate-500">Course:</span> {course.course_name} ({course.course_code})</p>
-              <p><span className="text-slate-500">NBA code:</span> {course.nba_code || '—'}</p>
-              <p><span className="text-slate-500">Faculty:</span> {facultyPerson}</p>
-              <p><span className="text-slate-500">Coordinator:</span> {coordinator}</p>
-            </div>
-            {outcomes.length > 0 && (
-              <div className="mt-3 overflow-auto border rounded">
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="bg-slate-50 text-left text-slate-600">
-                      <th className="p-2">CO</th>
-                      <th className="p-2">Cognitive level (from CD)</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {outcomes.map((co) => (
-                      <tr key={co.id || co.co_code} className="border-t">
-                        <td className="p-2 font-semibold">{co.co_code}</td>
-                        <td className="p-2">{CO_LEVEL_LABELS[co.cognitive_level] || co.cognitive_level}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-3">
-              <label className="block text-sm">
-                <span className="block text-xs font-medium text-slate-600 mb-1">Semester label (document)</span>
-                <input className="w-full border rounded px-3 py-2 text-sm" value={doc.semester_label || ''}
-                  onChange={(e) => patchDoc({ semester_label: e.target.value })} placeholder="e.g. 1st Semester" />
-              </label>
-              <label className="block text-sm">
-                <span className="block text-xs font-medium text-slate-600 mb-1">Module coordinator</span>
-                <input className="w-full border rounded px-3 py-2 text-sm" value={doc.module_coordinator || ''}
-                  onChange={(e) => patchDoc({ module_coordinator: e.target.value })} />
-              </label>
-              <label className="block text-sm sm:col-span-2">
-                <span className="block text-xs font-medium text-slate-600 mb-1">Document title</span>
-                <input className="w-full border rounded px-3 py-2 text-sm" value={doc.doc_title || ''}
-                  onChange={(e) => patchDoc({ doc_title: e.target.value })} />
-              </label>
-              <label className="block text-sm sm:col-span-2">
-                <span className="block text-xs font-medium text-slate-600 mb-1">Sub-heading</span>
-                <input className="w-full border rounded px-3 py-2 text-sm" value={doc.sub_heading || ''}
-                  onChange={(e) => patchDoc({ sub_heading: e.target.value })} />
-              </label>
-            </div>
-          </div>
-
-          <div>
-            <div className="flex items-center justify-between mb-2">
-              <h2 className="font-semibold text-slate-900">Assessment tools</h2>
-              <div className="flex gap-2">
-                <button type="button" className="text-xs font-semibold bg-blue-100 text-blue-900 px-3 py-1.5 rounded" onClick={() => load().then(() => setStatus('Synced from Students & Marks.'))}>
-                  Sync from Students & Marks
-                </button>
-                {!syncedFromMarks && (
-                  <button type="button" className="text-xs font-semibold bg-slate-200 px-3 py-1.5 rounded" onClick={addTool}>
-                    + Add tool
-                  </button>
-                )}
           <section className="border-b pb-4">
             <h3 className="font-semibold mb-2">Heading</h3>
             <label className="block mb-2">

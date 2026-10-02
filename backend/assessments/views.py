@@ -42,7 +42,7 @@ class AssessmentViewSet(viewsets.ModelViewSet):
             return Response({'error': 'Not allowed.'}, status=403)
         if getattr(course, 'is_lab', False) or getattr(course, 'course_kind', '') == 'LAB':
             created = ensure_lab_blocks(course)
-            types = ['MID', 'END', 'D2D']
+            types = ['MID', 'END', 'D2D', 'FEEDBACK']
         else:
             created = ensure_sheet_blocks(course)
             types = ['T1', 'T2', 'T3', 'TA', 'FEEDBACK']
@@ -122,13 +122,14 @@ class StudentViewSet(viewsets.ModelViewSet):
         for row in rows:
             roll = str(row.get('roll_number') or '').strip()
             name = str(row.get('name') or '').strip()
+            batch = str(row.get('batch') or '').strip()
             if not roll or not name:
                 continue
             key = roll.casefold()
             if key in seen:
                 continue
             seen.add(key)
-            parsed.append((roll, name, key))
+            parsed.append((roll, name, batch, key))
         if not parsed:
             return Response({'error': 'No valid student rows found.'}, status=400)
 
@@ -143,32 +144,38 @@ class StudentViewSet(viewsets.ModelViewSet):
             if mode == 'append':
                 mx = Student.objects.filter(course=course).aggregate(m=Max('sort_order'))['m']
                 next_order = (mx if mx is not None else -1) + 1
-                for roll, name, key in parsed:
+                for roll, name, batch, key in parsed:
                     obj = existing.get(key)
                     if obj:
                         obj.name = name
-                        obj.save(update_fields=['name'])
+                        if batch:
+                            obj.batch = batch
+                        obj.save(update_fields=['name', 'batch'] if batch else ['name'])
                         updated += 1
                     else:
                         Student.objects.create(
-                            course=course, roll_number=roll, name=name, sort_order=next_order,
+                            course=course, roll_number=roll, name=name, batch=batch, sort_order=next_order,
                         )
                         next_order += 1
                         created += 1
             else:
                 uploaded_keys = set()
-                for i, (roll, name, key) in enumerate(parsed):
+                for i, (roll, name, batch, key) in enumerate(parsed):
                     uploaded_keys.add(key)
                     obj = existing.get(key)
                     if obj:
                         obj.roll_number = roll
                         obj.name = name
                         obj.sort_order = i
-                        obj.save(update_fields=['roll_number', 'name', 'sort_order'])
+                        fields = ['roll_number', 'name', 'sort_order']
+                        if batch:
+                            obj.batch = batch
+                            fields.append('batch')
+                        obj.save(update_fields=fields)
                         updated += 1
                     else:
                         obj = Student.objects.create(
-                            course=course, roll_number=roll, name=name, sort_order=i,
+                            course=course, roll_number=roll, name=name, batch=batch, sort_order=i,
                         )
                         existing[key] = obj
                         created += 1
