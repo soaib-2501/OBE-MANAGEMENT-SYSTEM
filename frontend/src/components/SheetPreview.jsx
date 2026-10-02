@@ -12,7 +12,7 @@ function Header({ course, examLabel }) {
   return (
     <div className="sheet-print-header">
       <p className="font-bold text-center text-sm uppercase">{course.institute || 'Institute'}</p>
-      <p className="text-center text-[11px]">{course.academic_year} · {course.semester} · {course.program_name || ''}</p>
+      <p className="text-center text-[11px]">{course.session_label || course.academic_year} · {course.program_name || ''}</p>
       <p className="text-center font-semibold text-[12px] mt-1">{course.course_code} — {course.course_name}</p>
       {course.nba_code ? <p className="text-center text-[11px]">NBA Code: {course.nba_code}</p> : null}
       {examLabel ? <p className="text-center font-bold text-[13px] mt-2">{examLabel}</p> : null}

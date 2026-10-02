@@ -1,7 +1,65 @@
 from django.db import transaction
 from rest_framework import serializers
 from .access import faculty_owns_course
-from .models import Course, CourseOutcome, CoPoMapping, LectureModule, CourseBook
+from .models import (
+    AcademicSession, FacultyProfile, NbaSubjectCatalog,
+    Course, CourseOutcome, CoPoMapping, LectureModule, CourseBook,
+    is_lab_subject_name,
+)
+
+
+class AcademicSessionSerializer(serializers.ModelSerializer):
+    label = serializers.CharField(read_only=True)
+
+    class Meta:
+        model = AcademicSession
+        fields = ['id', 'calendar_year', 'semester_type', 'label']
+
+
+class FacultyProfileSerializer(serializers.ModelSerializer):
+    campus_label = serializers.CharField(source='get_campus_display', read_only=True)
+
+    class Meta:
+        model = FacultyProfile
+        fields = [
+            'id', 'full_name', 'campus', 'campus_label', 'email',
+            'department', 'employee_id', 'user', 'is_active',
+        ]
+
+
+class NbaSubjectCatalogSerializer(serializers.ModelSerializer):
+    session_label = serializers.CharField(source='session.label', read_only=True)
+    label = serializers.SerializerMethodField()
+    is_lab = serializers.BooleanField(read_only=True)
+
+    class Meta:
+        model = NbaSubjectCatalog
+        fields = [
+            'id', 'session', 'session_label', 'program_name', 'course_code', 'course_name',
+            'year_of_study', 'semester_number', 'nba_code', 'credits', 'label', 'is_lab',
+        ]
+
+    def get_label(self, obj):
+        return f'{obj.nba_code} — {obj.course_name} ({obj.course_code})'
+
+
+def apply_catalog_snapshot(attrs):
+    entry = attrs.get('catalog_entry')
+    if not entry:
+        return attrs
+    session = entry.session
+    attrs['academic_session'] = session
+    attrs['course_code'] = entry.course_code
+    attrs['course_name'] = entry.course_name
+    attrs['program_name'] = entry.program_name
+    attrs['nba_code'] = entry.nba_code
+    attrs['year_of_study'] = entry.year_of_study
+    attrs['semester_number'] = entry.semester_number
+    attrs['semester'] = session.semester_type
+    attrs['academic_year'] = session.label
+    if entry.credits:
+        attrs['credits'] = entry.credits
+    return attrs
 
 
 class CoPoMappingSerializer(serializers.ModelSerializer):
@@ -61,6 +119,9 @@ class LectureModuleSerializer(serializers.ModelSerializer):
 class CourseSerializer(serializers.ModelSerializer):
     outcomes = CourseOutcomeSerializer(many=True, required=False)
     faculty_name = serializers.SerializerMethodField()
+    teaching_faculty_name = serializers.CharField(source='teaching_faculty_display', read_only=True)
+    course_coordinator_name = serializers.CharField(source='coordinator_display', read_only=True)
+    session_label = serializers.CharField(read_only=True)
     modules = LectureModuleSerializer(many=True, required=False)
     text_books = serializers.ListField(child=serializers.CharField(allow_blank=True), required=False, write_only=True)
     reference_books = serializers.ListField(child=serializers.CharField(allow_blank=True), required=False, write_only=True)
@@ -70,8 +131,12 @@ class CourseSerializer(serializers.ModelSerializer):
     class Meta:
         model = Course
         fields = [
-            'id', 'course_code', 'course_name', 'program_name', 'department', 'nba_code', 'semester', 'academic_year',
-            'credits', 'faculty', 'faculty_name', 'outcomes', 'created_at',
+            'id', 'academic_session', 'session_label', 'catalog_entry', 'course_kind', 'is_lab',
+            'course_code', 'course_name', 'program_name', 'department', 'nba_code',
+            'year_of_study', 'semester_number', 'semester', 'academic_year',
+            'credits', 'faculty', 'faculty_name', 'teaching_faculty', 'teaching_faculty_name',
+            'course_coordinator', 'course_coordinator_name',
+            'outcomes', 'created_at',
             'doc_title', 'institute', 'institute_sub', 'logo_fallback', 'watermark_text',
             'coordinator_names', 't1_marks', 't2_marks', 'end_sem_marks', 'ta_marks',
             'pbl', 'eval_total', 'modules', 'text_books', 'reference_books',
@@ -82,19 +147,40 @@ class CourseSerializer(serializers.ModelSerializer):
             'program_name': {'required': False, 'allow_blank': True},
             'department': {'required': False, 'allow_blank': True},
             'nba_code': {'required': False, 'allow_blank': True},
+            'academic_year': {'required': False, 'allow_blank': True},
+            'semester': {'required': False},
+            'course_code': {'required': False, 'allow_blank': True},
+            'course_name': {'required': False, 'allow_blank': True},
+            'is_lab': {'read_only': True},
         }
-        # UniqueConstraint(course_code, academic_year, faculty) would otherwise
-        # force faculty in the payload. Faculty users are assigned in validate().
         validators = []
 
     def validate(self, attrs):
         request = self.context.get('request')
         user = getattr(request, 'user', None)
+        attrs = apply_catalog_snapshot(attrs)
         if user is not None and getattr(user, 'is_faculty_role', False):
             attrs['faculty'] = user
+        coordinator = attrs.get('course_coordinator', getattr(self.instance, 'course_coordinator', None))
+        if coordinator and not attrs.get('coordinator_names'):
+            attrs['coordinator_names'] = coordinator.full_name
         faculty = attrs.get('faculty', getattr(self.instance, 'faculty', None))
         code = attrs.get('course_code', getattr(self.instance, 'course_code', None))
+        name = attrs.get('course_name', getattr(self.instance, 'course_name', None))
         year = attrs.get('academic_year', getattr(self.instance, 'academic_year', None))
+        kind = attrs.get('course_kind', getattr(self.instance, 'course_kind', Course.Kind.THEORY))
+        attrs['is_lab'] = kind == Course.Kind.LAB
+        entry = attrs.get('catalog_entry', getattr(self.instance, 'catalog_entry', None))
+        if entry is not None:
+            entry_is_lab = is_lab_subject_name(entry.course_name)
+            if kind == Course.Kind.LAB and not entry_is_lab:
+                raise serializers.ValidationError('Select a lab NBA subject for a lab course.')
+            if kind == Course.Kind.THEORY and entry_is_lab:
+                raise serializers.ValidationError('Lab subjects belong under Lab Courses, not Courses.')
+        if not code or not name:
+            raise serializers.ValidationError('Select an NBA subject (or enter course code and name).')
+        if not year:
+            raise serializers.ValidationError('Select an academic session.')
         if code and year:
             qs = Course.objects.filter(course_code=code, academic_year=year, faculty=faculty)
             if self.instance:

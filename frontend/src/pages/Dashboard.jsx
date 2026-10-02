@@ -96,13 +96,13 @@ export default function Dashboard() {
               {(data?.courses ?? []).map((c) => (
                 <tr key={c.id} className="border-b last:border-0 hover:bg-slate-50">
                   <td className="px-6 py-3">
-                    <Link to={`/courses/${c.id}`} className="font-semibold text-slate-900 hover:underline">
+                    <Link to={`/courses/${c.id}/description`} className="font-semibold text-slate-900 hover:underline">
                       {c.course_code}
                     </Link>
                     <p className="text-xs text-slate-500">{c.course_name}</p>
                     {c.faculty_name && <p className="text-xs text-slate-400">{c.faculty_name}</p>}
                   </td>
-                  <td className="px-4 py-3 text-slate-600 whitespace-nowrap">{c.academic_year}</td>
+                  <td className="px-4 py-3 text-slate-600 whitespace-nowrap">{c.session_label || c.academic_year}</td>
                   <td className="px-4 py-3 text-center">{c.outcome_count}</td>
                   <td className="px-4 py-3 text-center font-medium">
                     {c.avg_final != null ? `${c.avg_final}%` : '—'}

@@ -1,6 +1,12 @@
 from django.contrib import admin
-from .models import Course, CourseOutcome, CoPoMapping, LectureModule, CourseBook
+from .models import (
+    AcademicSession, FacultyProfile, NbaSubjectCatalog,
+    Course, CourseOutcome, CoPoMapping, LectureModule, CourseBook,
+)
 
+admin.site.register(AcademicSession)
+admin.site.register(FacultyProfile)
+admin.site.register(NbaSubjectCatalog)
 admin.site.register(Course)
 admin.site.register(CourseOutcome)
 admin.site.register(CoPoMapping)

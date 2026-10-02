@@ -1,8 +1,9 @@
 from django.db import transaction
-from django.db.models import Avg
+from django.db.models import Avg, Max
 from rest_framework import viewsets, permissions, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
+from courses.access import faculty_owns_course
 from courses.models import Course
 from .defaults import ensure_lab_blocks, ensure_sheet_blocks
 from .models import Assessment, Student, StudentMark, GradeBand
@@ -120,23 +121,18 @@ class StudentViewSet(viewsets.ModelViewSet):
         seen = set()
         for row in rows:
             roll = str(row.get('roll_number') or '').strip()
-            if not roll:
-                continue
             name = str(row.get('name') or '').strip()
+            if not roll or not name:
+                continue
             key = roll.casefold()
             if key in seen:
                 continue
             seen.add(key)
-            batch = str(row.get('batch') or '').strip()
-            parsed.append((roll, name, key, batch))
+            parsed.append((roll, name, key))
         if not parsed:
             return Response({'error': 'No valid student rows found.'}, status=400)
 
         mode = (request.data.get('mode') or 'replace_order').strip()
-        if mode != 'match_only':
-            parsed = [row for row in parsed if row[1]]
-            if not parsed:
-                return Response({'error': 'No valid student rows found.'}, status=400)
         created = 0
         updated = 0
         with transaction.atomic():
@@ -147,55 +143,32 @@ class StudentViewSet(viewsets.ModelViewSet):
             if mode == 'append':
                 mx = Student.objects.filter(course=course).aggregate(m=Max('sort_order'))['m']
                 next_order = (mx if mx is not None else -1) + 1
-                for roll, name, key, batch in parsed:
+                for roll, name, key in parsed:
                     obj = existing.get(key)
                     if obj:
                         obj.name = name
-                        fields = ['name']
-                        if batch:
-                            obj.batch = batch
-                            fields.append('batch')
-                        obj.save(update_fields=fields)
+                        obj.save(update_fields=['name'])
                         updated += 1
                     else:
                         Student.objects.create(
-                            course=course, roll_number=roll, name=name, batch=batch, sort_order=next_order,
+                            course=course, roll_number=roll, name=name, sort_order=next_order,
                         )
                         next_order += 1
                         created += 1
-            elif mode == 'match_only':
-                for roll, name, key, batch in parsed:
-                    obj = existing.get(key)
-                    if not obj:
-                        continue
-                    fields = []
-                    if name and not obj.name:
-                        obj.name = name
-                        fields.append('name')
-                    if batch and obj.batch != batch:
-                        obj.batch = batch
-                        fields.append('batch')
-                    if fields:
-                        obj.save(update_fields=fields)
-                        updated += 1
             else:
                 uploaded_keys = set()
-                for i, (roll, name, key, batch) in enumerate(parsed):
+                for i, (roll, name, key) in enumerate(parsed):
                     uploaded_keys.add(key)
                     obj = existing.get(key)
                     if obj:
                         obj.roll_number = roll
                         obj.name = name
                         obj.sort_order = i
-                        fields = ['roll_number', 'name', 'sort_order']
-                        if batch:
-                            obj.batch = batch
-                            fields.append('batch')
-                        obj.save(update_fields=fields)
+                        obj.save(update_fields=['roll_number', 'name', 'sort_order'])
                         updated += 1
                     else:
                         obj = Student.objects.create(
-                            course=course, roll_number=roll, name=name, batch=batch, sort_order=i,
+                            course=course, roll_number=roll, name=name, sort_order=i,
                         )
                         existing[key] = obj
                         created += 1

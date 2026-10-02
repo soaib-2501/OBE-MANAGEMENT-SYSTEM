@@ -252,7 +252,8 @@ export default function CourseClosingReport() {
   if (!course || !report) return <div className="p-8">Loading…</div>;
 
   const dept = course.department || '—';
-  const coordinator = course.coordinator_names || course.faculty_name || '—';
+  const coordinator = coordinatorName(course);
+  const facultyPerson = teachingFacultyName(course);
   const ay = course.academic_year;
   const nba = course.nba_code || '—';
   const td = 'border border-slate-800 px-1.5 py-1';
@@ -267,11 +268,11 @@ export default function CourseClosingReport() {
   return (
     <div className="p-8 max-w-6xl mx-auto print:p-0 print:max-w-none">
       <div className="no-print">
-        <Link to="/courses" className="text-sm text-slate-500 hover:text-slate-700">← Back to Courses</Link>
+        <Link to={coursesListPath(course)} className="text-sm text-slate-500 hover:text-slate-700">← Back to {coursesListLabel(course)}</Link>
         <h1 className="text-2xl font-bold text-slate-900 mt-2 mb-1">{course.course_code} — {course.course_name}</h1>
         <p className="text-sm text-slate-500 mb-4">
-          Session {ay} · {semesterWord}
-          {course.faculty_name ? ` · ${course.faculty_name}` : ''}
+          Session {course.session_label || ay}
+          {` · Faculty: ${facultyPerson} · Coordinator: ${coordinator}`}
         </p>
         <CourseSubnav courseId={id} />
 
@@ -300,6 +301,7 @@ export default function CourseClosingReport() {
               <p><span className="text-slate-500">Programme:</span> {course.program_name || '—'}</p>
               <p className="col-span-2"><span className="text-slate-500">Course:</span> {course.course_name} ({course.course_code})</p>
               <p><span className="text-slate-500">NBA code:</span> {nba}</p>
+              <p><span className="text-slate-500">Faculty:</span> {facultyPerson}</p>
               <p><span className="text-slate-500">Coordinator:</span> {coordinator}</p>
             </div>
             <div className="grid grid-cols-2 gap-3 mt-3">
@@ -538,6 +540,7 @@ export default function CourseClosingReport() {
                   <div><b>Semester:</b> {report.semester_label || `${semesterWord} Semester`}</div>
                   <div><b>Course Name &amp; Code:</b> {course.course_name} ({course.course_code})</div>
                   <div><b>NBA Code:</b> {nba}</div>
+                  <div><b>Faculty:</b> {facultyPerson}</div>
                   <div><b>Name of Course Coordinator:</b> {coordinator}</div>
                 </td>
               </tr>

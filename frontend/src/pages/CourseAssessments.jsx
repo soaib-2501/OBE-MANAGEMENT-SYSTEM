@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import api from '../api/client';
 import CourseSubnav from '../components/CourseSubnav';
@@ -7,7 +7,7 @@ import LabSheetPreview from '../components/LabSheetPreview';
 import { parseExamMetaFromRows, parseMarksFromRows, parseRosterFromRows, readSpreadsheetRows } from '../utils/excelImport';
 import { coursesListLabel, coursesListPath, isLabCourse } from '../utils/offering';
 
-const BLOCKS = [
+const THEORY_BLOCKS = [
   { key: 'T1', label: 'T1' },
   { key: 'T2', label: 'T2' },
   { key: 'T3', label: 'T3' },
@@ -91,6 +91,87 @@ function BarChart({ title, items, unit = '' }) {
   );
 }
 
+function ExcelUploadButton({ label = 'Upload Excel', disabled, onFile }) {
+  const inputRef = useRef(null);
+  return (
+    <>
+      <input
+        ref={inputRef}
+        type="file"
+        accept=".xlsx,.xls,.csv"
+        className="hidden"
+        onChange={async (e) => {
+          const file = e.target.files?.[0];
+          e.target.value = '';
+          if (file) await onFile(file);
+        }}
+      />
+      <button
+        type="button"
+        disabled={disabled}
+        onClick={() => inputRef.current?.click()}
+        className="bg-slate-200 px-3 py-1.5 rounded text-xs font-semibold disabled:opacity-50"
+      >
+        {label}
+      </button>
+    </>
+  );
+}
+
+function ExamCoSummary({ summary, loading }) {
+  const title = summary?.label ? `${summary.label} — CO summary` : 'CO summary';
+  return (
+    <section className="bg-white shadow rounded-lg p-6 overflow-auto">
+      <h3 className="font-semibold mb-1">{title}</h3>
+      {summary && (
+        <p className="text-[11px] text-slate-500 mb-2">
+          Target ≥ {summary.target_percent}% · Total {summary.total_students} · Appeared {summary.appeared}
+          {summary.use_ceiling ? ' · ceiling on' : ''}
+        </p>
+      )}
+      {loading && !summary && <p className="text-sm text-slate-500">Computing CO summary…</p>}
+      {!loading && !summary && (
+        <p className="text-sm text-slate-500">Save marks &amp; calculate to see this exam’s CO attainment.</p>
+      )}
+      {summary && (summary.cos || []).length > 0 && (
+        <table className="w-full text-xs border-collapse max-w-3xl">
+          <thead>
+            <tr className="bg-slate-50">
+              <th className="border p-1"> </th>
+              {summary.cos.map((c) => (
+                <th key={c.co_code} className="border p-1">{c.co_code}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td className="border p-1">No. scored ≥ target</td>
+              {summary.cos.map((c) => (
+                <td key={c.co_code} className="border p-1 text-center">{c.count_at_target}</td>
+              ))}
+            </tr>
+            <tr>
+              <td className="border p-1">% scored ≥ target</td>
+              {summary.cos.map((c) => (
+                <td key={c.co_code} className="border p-1 text-center">{fmt(c.pct_at_target, 1)}%</td>
+              ))}
+            </tr>
+            <tr>
+              <td className="border p-1">CO attainment level</td>
+              {summary.cos.map((c) => (
+                <td key={c.co_code} className="border p-1 text-center"><LevelBadge level={c.level} /></td>
+              ))}
+            </tr>
+          </tbody>
+        </table>
+      )}
+      {summary && !(summary.cos || []).length && (
+        <p className="text-sm text-slate-500">No CO rows yet. Map questions to COs, then save marks.</p>
+      )}
+    </section>
+  );
+}
+
 export default function CourseAssessments() {
   const { id } = useParams();
   const [course, setCourse] = useState(null);
@@ -107,6 +188,7 @@ export default function CourseAssessments() {
   const [studentForm, setStudentForm] = useState({ roll_number: '', name: '', batch: '' });
   const [bulkText, setBulkText] = useState('');
   const [marksGrid, setMarksGrid] = useState({});
+  const [uploading, setUploading] = useState(false);
 
   const outcomes = course?.outcomes ?? [];
   const block = assessments.find((a) => a.assessment_type === tab) || null;
@@ -175,6 +257,7 @@ export default function CourseAssessments() {
   }
 
   useEffect(() => {
+    setTab('roster');
     loadAll();
   }, [id]);
 
@@ -224,6 +307,7 @@ export default function CourseAssessments() {
     e.preventDefault();
     setError('');
     const lines = bulkText.split('\n').map((l) => l.trim()).filter(Boolean);
+    const studentsRows = [];
     try {
       for (const line of lines) {
         if (/^roll/i.test(line) || /^enrol/i.test(line)) continue;
@@ -250,9 +334,35 @@ export default function CourseAssessments() {
         students: studentsRows,
       });
       setBulkText('');
-      await loadAll();
+      setStudents(res.data.students || []);
+      setStatus(`Imported ${res.data.count} students (${res.data.created} new, ${res.data.updated} updated).`);
     } catch (err) {
       setError(formatError(err, 'Could not import students.'));
+    }
+  }
+
+  async function importRosterExcel(file) {
+    setError('');
+    setStatus('');
+    setUploading(true);
+    try {
+      const rows = await readSpreadsheetRows(file, { tab: 'roster' });
+      const studentsRows = parseRosterFromRows(rows);
+      if (!studentsRows.length) {
+        setError('Could not find Enrol No and Name columns in that Excel file.');
+        return;
+      }
+      const res = await api.post('/assessments/students/bulk/', {
+        course: Number(id),
+        mode: 'replace_order',
+        students: studentsRows,
+      });
+      setStudents(res.data.students || []);
+      setStatus(`Uploaded ${res.data.count} students from Excel (${res.data.created} new, ${res.data.updated} updated). Remove is still available on every row.`);
+    } catch (err) {
+      setError(formatError(err, 'Could not import roster from Excel.'));
+    } finally {
+      setUploading(false);
     }
   }
 
@@ -286,11 +396,41 @@ export default function CourseAssessments() {
       });
       setStatus('Settings saved.');
       await loadAll();
+      await loadSheet();
     } catch (err) {
       setError(formatError(err, 'Could not save settings.'));
     } finally {
       setSaving(false);
     }
+  }
+
+  async function persistMarks(grid, roster) {
+    if (!block) return;
+    const list = roster || students;
+    const marks = [];
+    for (const student of list) {
+      for (const q of block.questions || []) {
+        if (!q.id) continue;
+        const raw = grid[`${student.id}-${q.id}`];
+        if (raw === undefined || raw === '') continue;
+        const num = Number(raw);
+        if (Number.isNaN(num)) {
+          setError(`Invalid mark for ${student.roll_number} / ${q.label}`);
+          return false;
+        }
+        marks.push({ student: student.id, question: q.id, marks_obtained: num });
+      }
+    }
+    const res = await api.post('/assessments/marks/replace/', { assessment: block.id, marks });
+    if (res.data) {
+      patchBlock({
+        total_students: res.data.total_students,
+        appeared: res.data.appeared,
+      });
+    }
+    setSheet(null);
+    await loadSheet();
+    return marks.length;
   }
 
   async function saveMarks() {
@@ -299,30 +439,9 @@ export default function CourseAssessments() {
     setError('');
     setStatus('');
     try {
-      const marks = [];
-      for (const student of students) {
-        for (const q of block.questions || []) {
-          if (!q.id) continue;
-          const raw = marksGrid[`${student.id}-${q.id}`];
-          if (raw === undefined || raw === '') continue;
-          const num = Number(raw);
-          if (Number.isNaN(num)) {
-            setError(`Invalid mark for ${student.roll_number} / ${q.label}`);
-            setSaving(false);
-            return;
-          }
-          marks.push({ student: student.id, question: q.id, marks_obtained: num });
-        }
-      }
-      const res = await api.post('/assessments/marks/replace/', { assessment: block.id, marks });
-      if (res.data) {
-        patchBlock({
-          total_students: res.data.total_students,
-          appeared: res.data.appeared,
-        });
-      }
-      setStatus(`Saved ${marks.length} marks.`);
-      setSheet(null);
+      const n = await persistMarks(marksGrid, students);
+      if (n === false) return;
+      setStatus(`Saved ${n} marks.`);
     } catch (err) {
       setError(formatError(err, 'Could not save marks.'));
     } finally {
@@ -419,12 +538,18 @@ export default function CourseAssessments() {
     );
   }
 
+  const listPath = coursesListPath(course);
+  const listLabel = coursesListLabel(course);
+
   return (
     <div className="p-8 max-w-6xl mx-auto print:p-0 print:max-w-none">
-      <Link to="/courses" className="text-sm text-slate-500 hover:text-slate-700 no-print">← Back to Courses</Link>
+      <Link to={listPath} className="text-sm text-slate-500 hover:text-slate-700 no-print">← Back to {listLabel}</Link>
       <h1 className="text-2xl font-bold text-slate-900 mt-2 mb-1 no-print">{course.course_code} — {course.course_name}</h1>
       <p className="text-sm text-slate-500 mb-4 no-print">
-        {course.semester} · {course.academic_year} · one shared student list for T1, T2, T3, TA and Feedback
+        {course.session_label || course.academic_year}
+        {lab
+          ? ' · one shared student list for Mid Sem, End Sem, D2D, Exit Survey and CO Attainment'
+          : ' · one shared student list for T1, T2, T3, TA and Feedback'}
       </p>
       <CourseSubnav courseId={id} />
 
@@ -444,6 +569,15 @@ export default function CourseAssessments() {
         ))}
       </div>
 
+      {lab && LAB_PLACEHOLDER_TABS.some((t) => t.id === tab) && (
+        <section className="bg-white shadow rounded-lg p-6">
+          <h2 className="font-semibold mb-1">{LAB_PLACEHOLDER_TABS.find((t) => t.id === tab)?.label}</h2>
+          <p className="text-sm text-slate-500">
+            This lab assessment tab is ready. Detailed fields and mark entry will be added in a follow-up.
+          </p>
+        </section>
+      )}
+
       {tab === 'roster' && (
         <section className="bg-white shadow rounded-lg p-6">
           <h2 className="font-semibold mb-1">Student roster</h2>
@@ -462,7 +596,10 @@ export default function CourseAssessments() {
           <textarea className="w-full border rounded px-3 py-2 text-sm h-24 mb-2"
             placeholder={'Bulk: enrol, name — one per line\n2403030001, SHANTAM ATTRY'}
             value={bulkText} onChange={(e) => setBulkText(e.target.value)} />
-          <button type="button" onClick={addBulk} className="bg-slate-200 px-3 py-1.5 rounded text-xs font-semibold mb-4">Import roster</button>
+          <div className="flex flex-wrap gap-2 mb-4">
+            <button type="button" onClick={addBulk} className="bg-slate-200 px-3 py-1.5 rounded text-xs font-semibold">Import roster</button>
+            <ExcelUploadButton disabled={uploading} onFile={importRosterExcel} label={uploading ? 'Uploading…' : 'Upload Excel'} />
+          </div>
           <table className="w-full text-sm">
             <thead><tr className="text-left text-slate-500 border-b"><th className="py-2">S.No</th><th>Enrol No</th><th>Name</th>{lab ? <th>Batch</th> : null}<th></th></tr></thead>
             <tbody>
@@ -481,7 +618,7 @@ export default function CourseAssessments() {
         </section>
       )}
 
-      {BLOCKS.some((b) => b.key === tab) && block && (
+      {!lab && THEORY_BLOCKS.some((b) => b.key === tab) && block && (
         <div className="space-y-4">
           <div className="no-print space-y-4">
           <section className="bg-white shadow rounded-lg p-6">
@@ -765,7 +902,7 @@ export default function CourseAssessments() {
         </section>
       )}
 
-      {!lab && tab === 'attainment' && (
+      {!lab && !lab && tab === 'attainment' && (
         <section className="bg-white shadow rounded-lg p-6 overflow-auto">
           <div className="no-print">
           <div className="flex flex-wrap justify-between gap-2 mb-4">
@@ -813,35 +950,6 @@ export default function CourseAssessments() {
               )}
             </tbody>
           </table>
-
-          {(sheet?.exam_summaries || []).map((ex) => (
-            <div key={ex.type} className="mt-6">
-              <h3 className="font-semibold mb-1">{ex.label} — CO summary</h3>
-              <p className="text-[11px] text-slate-500 mb-2">Target ≥ {ex.target_percent}% · Total {ex.total_students} · Appeared {ex.appeared}{ex.use_ceiling ? ' · ceiling on' : ''}</p>
-              <table className="w-full text-xs border-collapse max-w-3xl">
-                <thead>
-                  <tr className="bg-slate-50">
-                    <th className="border p-1"> </th>
-                    {ex.cos.map((c) => <th key={c.co_code} className="border p-1">{c.co_code}</th>)}
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr>
-                    <td className="border p-1">No. scored ≥ target</td>
-                    {ex.cos.map((c) => <td key={c.co_code} className="border p-1 text-center">{c.count_at_target}</td>)}
-                  </tr>
-                  <tr>
-                    <td className="border p-1">% scored ≥ target</td>
-                    {ex.cos.map((c) => <td key={c.co_code} className="border p-1 text-center">{fmt(c.pct_at_target, 1)}%</td>)}
-                  </tr>
-                  <tr>
-                    <td className="border p-1">CO attainment level</td>
-                    {ex.cos.map((c) => <td key={c.co_code} className="border p-1 text-center"><LevelBadge level={c.level} /></td>)}
-                  </tr>
-                </tbody>
-              </table>
-            </div>
-          ))}
 
           <h3 className="font-semibold mt-8 mb-2">CO–PO–PSO Mapping</h3>
           <table className="w-full text-xs border-collapse min-w-[640px]">
@@ -910,7 +1018,7 @@ export default function CourseAssessments() {
         </section>
       )}
 
-      {tab === 'result' && (
+      {!lab && tab === 'result' && (
         <section className="bg-white shadow rounded-lg p-6 overflow-auto">
           <div className="no-print">
           <div className="flex flex-wrap justify-between gap-2 mb-3">
