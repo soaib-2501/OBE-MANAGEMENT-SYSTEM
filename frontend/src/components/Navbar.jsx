@@ -26,7 +26,7 @@ export default function Navbar() {
       <div className="flex items-center gap-4 text-sm">
         <span className="text-slate-300">{user.name} · {user.role}</span>
         <button
-          onClick={() => { logout(); navigate('/login'); }}
+          onClick={async () => { await logout(); navigate('/login'); }}
           className="bg-slate-700 hover:bg-slate-600 px-3 py-1.5 rounded"
         >
           Logout

@@ -68,8 +68,8 @@ class HistoricalCoAttainment(models.Model):
         ordering = ['-academic_year', 'co_code']
         constraints = [
             models.UniqueConstraint(
-                fields=['course_code', 'academic_year', 'semester', 'co_code'],
-                name='unique_historical_co_attainment',
+                fields=['course_code', 'academic_year', 'semester', 'co_code', 'faculty'],
+                name='unique_historical_co_attainment_per_faculty',
             ),
         ]
 

@@ -11,7 +11,9 @@ class DashboardSummaryView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        courses = Course.objects.select_related('faculty', 'academic_session').all()
+        courses = Course.objects.select_related(
+            'faculty', 'academic_session', 'teaching_faculty',
+        ).all()
         if request.user.is_faculty_role:
             courses = courses.filter(faculty=request.user)
 
@@ -61,7 +63,10 @@ class DashboardSummaryView(APIView):
                     'attainment_count': c.attainment_count,
                     'avg_final': round(float(c.avg_final), 2) if c.avg_final is not None else None,
                     'avg_level': round(float(c.avg_level), 2) if c.avg_level is not None else None,
-                    'faculty_name': (c.faculty.get_full_name() or c.faculty.username) if c.faculty else None,
+                    'faculty_name': c.teaching_faculty_display or (
+                        (c.faculty.get_full_name() or c.faculty.username) if c.faculty else None
+                    ),
+                    'teaching_faculty_name': c.teaching_faculty_display or None,
                     'pending': c.outcome_count > 0 and c.attainment_count < c.outcome_count,
                 }
                 for c in course_rows

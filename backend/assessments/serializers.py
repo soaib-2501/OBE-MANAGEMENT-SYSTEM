@@ -1,3 +1,4 @@
+from django.db import transaction
 from rest_framework import serializers
 from courses.access import faculty_owns_course
 from .models import Assessment, AssessmentQuestion, Student, StudentMark, GradeBand
@@ -42,6 +43,10 @@ class AssessmentSerializer(serializers.ModelSerializer):
 
     def update(self, instance, validated_data):
         questions_data = validated_data.pop('questions', None)
+        with transaction.atomic():
+            return self._update(instance, validated_data, questions_data)
+
+    def _update(self, instance, validated_data, questions_data):
         for attr, value in validated_data.items():
             setattr(instance, attr, value)
         instance.save()

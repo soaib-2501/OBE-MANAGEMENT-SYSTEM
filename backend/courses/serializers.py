@@ -1,4 +1,4 @@
-from django.db import transaction
+from django.db import IntegrityError, transaction
 from rest_framework import serializers
 from .access import faculty_owns_course
 from .models import (
@@ -26,6 +26,15 @@ class FacultyProfileSerializer(serializers.ModelSerializer):
             'department', 'employee_id', 'user', 'is_active',
         ]
 
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        request = self.context.get('request')
+        user = getattr(request, 'user', None) if request else None
+        if user is None or not getattr(user, 'is_admin_role', False):
+            data.pop('email', None)
+            data.pop('employee_id', None)
+        return data
+
 
 class NbaSubjectCatalogSerializer(serializers.ModelSerializer):
     session_label = serializers.CharField(source='session.label', read_only=True)
@@ -41,6 +50,19 @@ class NbaSubjectCatalogSerializer(serializers.ModelSerializer):
 
     def get_label(self, obj):
         return f'{obj.nba_code} — {obj.course_name} ({obj.course_code})'
+
+
+def department_for_programme(programme):
+    if not programme:
+        return ''
+    branch = (programme.branch or '').upper()
+    if branch == 'CSE':
+        return 'Department of CSE'
+    if branch == 'IT':
+        return 'Department of IT'
+    if branch == 'AIDS':
+        return 'Department of AI & DS'
+    return programme.name or ''
 
 
 def apply_catalog_snapshot(attrs):
@@ -59,6 +81,22 @@ def apply_catalog_snapshot(attrs):
     attrs['academic_year'] = session.label
     if entry.credits:
         attrs['credits'] = entry.credits
+    return attrs
+
+
+def apply_programme_fields(attrs, programme, raw):
+    if programme is None:
+        return attrs
+    requested_program = ''
+    requested_dept = ''
+    if hasattr(raw, 'get'):
+        requested_program = str(raw.get('program_name') or '').strip()
+        requested_dept = str(raw.get('department') or '').strip()
+    attrs['program_name'] = requested_program or programme.name
+    if requested_dept:
+        attrs['department'] = requested_dept
+    elif not str(attrs.get('department') or '').strip():
+        attrs['department'] = department_for_programme(programme)
     return attrs
 
 
@@ -92,9 +130,10 @@ class CourseOutcomeSerializer(serializers.ModelSerializer):
 
     def create(self, validated_data):
         mappings_data = validated_data.pop('mappings', [])
-        co = CourseOutcome.objects.create(**validated_data)
-        for m in mappings_data:
-            CoPoMapping.objects.create(course_outcome=co, **m)
+        with transaction.atomic():
+            co = CourseOutcome.objects.create(**validated_data)
+            for m in mappings_data:
+                CoPoMapping.objects.create(course_outcome=co, **m)
         return co
 
     def update(self, instance, validated_data):
@@ -135,7 +174,7 @@ class CourseSerializer(serializers.ModelSerializer):
             'course_code', 'course_name', 'program_name', 'department', 'nba_code',
             'year_of_study', 'semester_number', 'semester', 'academic_year',
             'credits', 'faculty', 'faculty_name', 'teaching_faculty', 'teaching_faculty_name',
-            'course_coordinator', 'course_coordinator_name',
+            'course_coordinator', 'course_coordinator_name', 'programme',
             'outcomes', 'created_at',
             'doc_title', 'institute', 'institute_sub', 'logo_fallback', 'watermark_text',
             'coordinator_names', 't1_marks', 't2_marks', 'end_sem_marks', 'ta_marks',
@@ -144,6 +183,9 @@ class CourseSerializer(serializers.ModelSerializer):
         ]
         extra_kwargs = {
             'faculty': {'required': False, 'allow_null': True},
+            'teaching_faculty': {'required': False, 'allow_null': True},
+            'course_coordinator': {'required': False, 'allow_null': True},
+            'programme': {'required': False, 'allow_null': True},
             'program_name': {'required': False, 'allow_blank': True},
             'department': {'required': False, 'allow_blank': True},
             'nba_code': {'required': False, 'allow_blank': True},
@@ -158,12 +200,21 @@ class CourseSerializer(serializers.ModelSerializer):
     def validate(self, attrs):
         request = self.context.get('request')
         user = getattr(request, 'user', None)
+        raw = getattr(self, 'initial_data', {}) or {}
         attrs = apply_catalog_snapshot(attrs)
+        programme = attrs.get('programme')
+        if programme is None and self.instance is not None and 'programme' not in attrs:
+            programme = self.instance.programme
+        attrs = apply_programme_fields(attrs, programme, raw)
         if user is not None and getattr(user, 'is_faculty_role', False):
             attrs['faculty'] = user
         coordinator = attrs.get('course_coordinator', getattr(self.instance, 'course_coordinator', None))
         if coordinator and not attrs.get('coordinator_names'):
             attrs['coordinator_names'] = coordinator.full_name
+        if self.instance is None and not attrs.get('teaching_faculty'):
+            raise serializers.ValidationError({
+                'teaching_faculty': 'Select the faculty name that should appear on the course documents.',
+            })
         faculty = attrs.get('faculty', getattr(self.instance, 'faculty', None))
         code = attrs.get('course_code', getattr(self.instance, 'course_code', None))
         name = attrs.get('course_name', getattr(self.instance, 'course_name', None))
@@ -183,11 +234,15 @@ class CourseSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError('Select an academic session.')
         if code and year:
             qs = Course.objects.filter(course_code=code, academic_year=year, faculty=faculty)
+            if programme is not None:
+                qs = qs.filter(programme=programme)
+            else:
+                qs = qs.filter(programme__isnull=True)
             if self.instance:
                 qs = qs.exclude(pk=self.instance.pk)
             if qs.exists():
                 raise serializers.ValidationError(
-                    'This course code already exists for this faculty in this session.'
+                    'This course already exists for this faculty in this session and programme. Open it from the list and use Edit.'
                 )
         return attrs
 
@@ -252,7 +307,12 @@ class CourseSerializer(serializers.ModelSerializer):
             modules_data = validated_data.pop('modules', [])
             text_books = validated_data.pop('text_books', [])
             reference_books = validated_data.pop('reference_books', [])
-            course = Course.objects.create(**validated_data)
+            try:
+                course = Course.objects.create(**validated_data)
+            except IntegrityError:
+                raise serializers.ValidationError(
+                    'This course already exists for this faculty in this session and programme. Open it from the list and use Edit.'
+                )
             for i, co_data in enumerate(outcomes_data):
                 mappings_data = co_data.pop('mappings', [])
                 co_data.pop('order', None)

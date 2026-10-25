@@ -1,3 +1,4 @@
+from django.conf import settings
 from django.db import models
 from courses.models import Course
 
@@ -51,6 +52,10 @@ class ClosingYearSnapshot(models.Model):
     nba_code = models.CharField(max_length=20, blank=True)
     academic_year = models.CharField(max_length=20)
     semester = models.CharField(max_length=6, choices=Course.Semester.choices)
+    faculty = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='closing_year_snapshots',
+    )
     co_attainments = models.JSONField(default=dict, blank=True)
     po_attainments = models.JSONField(default=dict, blank=True)
     source = models.CharField(max_length=12, choices=Source.choices, default=Source.SEED)
@@ -61,8 +66,8 @@ class ClosingYearSnapshot(models.Model):
         ordering = ['-academic_year']
         constraints = [
             models.UniqueConstraint(
-                fields=['course_code', 'academic_year', 'semester'],
-                name='unique_closing_year_snapshot',
+                fields=['course_code', 'academic_year', 'semester', 'faculty'],
+                name='unique_closing_year_snapshot_per_faculty',
             ),
         ]
 

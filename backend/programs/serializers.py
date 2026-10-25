@@ -1,3 +1,4 @@
+from django.db import transaction
 from rest_framework import serializers
 from .models import Programme, ProgrammeStatement
 
@@ -11,24 +12,37 @@ class ProgrammeStatementSerializer(serializers.ModelSerializer):
 
 class ProgrammeSerializer(serializers.ModelSerializer):
     statements = ProgrammeStatementSerializer(many=True, required=False)
+    po_count = serializers.SerializerMethodField()
+    pso_count = serializers.SerializerMethodField()
 
     class Meta:
         model = Programme
-        fields = ['id', 'degree', 'branch', 'name', 'slug', 'order', 'statements']
+        fields = [
+            'id', 'degree', 'branch', 'name', 'slug', 'order',
+            'po_count', 'pso_count', 'statements',
+        ]
+
+    def get_po_count(self, obj):
+        return len({s.code for s in obj.statements.all() if s.kind == 'PO' and s.code})
+
+    def get_pso_count(self, obj):
+        return len({s.code for s in obj.statements.all() if s.kind == 'PSO' and s.code})
 
     def create(self, validated_data):
         statements = validated_data.pop('statements', [])
-        obj = Programme.objects.create(**validated_data)
-        self._replace_statements(obj, statements)
+        with transaction.atomic():
+            obj = Programme.objects.create(**validated_data)
+            self._replace_statements(obj, statements)
         return obj
 
     def update(self, instance, validated_data):
         statements = validated_data.pop('statements', None)
-        for attr, value in validated_data.items():
-            setattr(instance, attr, value)
-        instance.save()
-        if statements is not None:
-            self._replace_statements(instance, statements)
+        with transaction.atomic():
+            for attr, value in validated_data.items():
+                setattr(instance, attr, value)
+            instance.save()
+            if statements is not None:
+                self._replace_statements(instance, statements)
         return instance
 
     def _replace_statements(self, programme, rows):

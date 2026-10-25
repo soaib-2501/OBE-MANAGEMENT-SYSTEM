@@ -1,11 +1,9 @@
 from rest_framework import viewsets, permissions
-from rest_framework.decorators import action
-from rest_framework.response import Response
 
 from users.permissions import IsAdminRole
 from .models import (
     AcademicSession, FacultyProfile, NbaSubjectCatalog, Course, CourseOutcome, CoPoMapping,
-    copy_catalog_from_previous, is_lab_subject_name,
+    copy_catalog_from_previous,
 )
 from .serializers import (
     AcademicSessionSerializer, FacultyProfileSerializer, NbaSubjectCatalogSerializer,
@@ -69,12 +67,6 @@ class NbaSubjectCatalogViewSet(viewsets.ModelViewSet):
         qs = NbaSubjectCatalog.objects.select_related('session').all()
         session_id = self.request.query_params.get('session')
         if session_id:
-            # Carry subjects forward if this session was created before the feature existed.
-            try:
-                session = AcademicSession.objects.get(pk=session_id)
-                copy_catalog_from_previous(session)
-            except (AcademicSession.DoesNotExist, ValueError, TypeError):
-                pass
             qs = qs.filter(session_id=session_id)
         year = self.request.query_params.get('calendar_year')
         sem = self.request.query_params.get('semester_type')
@@ -87,18 +79,12 @@ class NbaSubjectCatalogViewSet(viewsets.ModelViewSet):
             qs = qs.filter(program_name__icontains=program)
         kind = (self.request.query_params.get('kind') or '').upper()
         if kind in ('LAB', 'THEORY'):
-            # Filter in Python — lab detection is name-based (… LAB).
-            lab_ids = [row.id for row in qs if is_lab_subject_name(row.course_name)]
+            lab_q = {'course_name__iregex': r'\yLAB\y'}
             if kind == 'LAB':
-                qs = qs.filter(id__in=lab_ids)
+                qs = qs.filter(**lab_q)
             else:
-                qs = qs.exclude(id__in=lab_ids)
+                qs = qs.exclude(**lab_q)
         return qs
-
-    @action(detail=True, methods=['get'])
-    def snapshot(self, request, pk=None):
-        entry = self.get_object()
-        return Response(NbaSubjectCatalogSerializer(entry).data)
 
 
 class CourseViewSet(viewsets.ModelViewSet):
@@ -112,7 +98,7 @@ class CourseViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         qs = Course.objects.prefetch_related('outcomes__mappings', 'modules', 'books').select_related(
-            'faculty', 'academic_session', 'catalog_entry', 'teaching_faculty', 'course_coordinator',
+            'faculty', 'academic_session', 'catalog_entry', 'teaching_faculty', 'course_coordinator', 'programme',
         )
         qs = faculty_course_qs(self.request.user, qs)
         year = self.request.query_params.get('academic_year') or self.request.query_params.get('session')

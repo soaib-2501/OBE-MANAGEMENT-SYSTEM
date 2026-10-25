@@ -1,5 +1,5 @@
 export function teachingFacultyName(course) {
-  return course?.teaching_faculty_name || course?.faculty_name || '—';
+  return course?.teaching_faculty_name || '—';
 }
 
 export function coordinatorName(course) {

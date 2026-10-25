@@ -19,11 +19,6 @@ class ProgrammeViewSet(viewsets.ModelViewSet):
             return [IsAdminRole()]
         return [permissions.IsAuthenticated()]
 
-    def list(self, request, *args, **kwargs):
-        if not Programme.objects.exists():
-            seed_programmes(Programme, ProgrammeStatement)
-        return super().list(request, *args, **kwargs)
-
     @action(detail=False, methods=['post'], permission_classes=[IsAdminRole])
     def seed(self, request):
         created = seed_programmes(Programme, ProgrammeStatement)

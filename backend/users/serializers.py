@@ -49,6 +49,21 @@ class UserSerializer(serializers.ModelSerializer):
         model = User
         fields = ['id', 'username', 'first_name', 'last_name', 'email', 'role', 'password', 'is_active']
 
+    def validate_password(self, value):
+        if value:
+            validate_password(value, user=self.instance)
+        return value
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        request = self.context.get('request')
+        user = getattr(request, 'user', None) if request else None
+        if user is None or not getattr(user, 'is_admin_role', False):
+            if user is None or instance.pk != user.pk:
+                data.pop('email', None)
+            data.pop('is_active', None)
+        return data
+
     def create(self, validated_data):
         password = validated_data.pop('password', None)
         if not password:
@@ -62,6 +77,8 @@ class UserSerializer(serializers.ModelSerializer):
 
     def update(self, instance, validated_data):
         password = validated_data.pop('password', None)
+        if 'role' in validated_data and instance.is_superuser:
+            validated_data['role'] = User.Role.ADMIN
         for attr, value in validated_data.items():
             setattr(instance, attr, value)
         if password:

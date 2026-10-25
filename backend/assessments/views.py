@@ -1,10 +1,12 @@
+from collections import defaultdict
 from django.db import transaction
-from django.db.models import Avg, Max
+from django.db.models import Avg, Count, Max
 from rest_framework import viewsets, permissions, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from courses.access import faculty_owns_course
 from courses.models import Course
+from obe_backend.http import parse_pk
 from .defaults import ensure_lab_blocks, ensure_sheet_blocks
 from .models import Assessment, Student, StudentMark, GradeBand
 from .serializers import (
@@ -32,9 +34,9 @@ class AssessmentViewSet(viewsets.ModelViewSet):
     @action(detail=False, methods=['post'])
     def ensure(self, request):
         """Create T1/T2/T3/TA/Feedback blocks + default questions + grade bands if missing."""
-        course_id = request.data.get('course')
-        if not course_id:
+        if not request.data.get('course'):
             return Response({'error': 'course is required'}, status=400)
+        course_id = parse_pk(request.data.get('course'), 'course')
         course = Course.objects.filter(pk=course_id).first()
         if not course:
             return Response({'error': 'Course not found.'}, status=404)
@@ -54,31 +56,37 @@ class AssessmentViewSet(viewsets.ModelViewSet):
 
     @action(detail=False, methods=['get'])
     def report(self, request):
-        course_id = request.query_params.get('course')
-        if not course_id:
+        if not request.query_params.get('course'):
             return Response({'error': 'course is required'}, status=400)
-        assessments = faculty_scope(request.user, Assessment.objects.filter(course_id=course_id))
+        course_id = parse_pk(request.query_params.get('course'), 'course')
+        assessments = list(faculty_scope(request.user, Assessment.objects.filter(course_id=course_id)))
+        ids = [a.id for a in assessments]
+        marks = StudentMark.objects.filter(assessment_id__in=ids)
+        overall_map = {
+            row['assessment_id']: row
+            for row in marks.values('assessment_id').annotate(avg=Avg('marks_obtained'), n=Count('id'))
+        }
+        by_co_map = defaultdict(list)
+        for item in marks.values('assessment_id', 'course_outcome', 'course_outcome__co_code').annotate(avg=Avg('marks_obtained')):
+            by_co_map[item['assessment_id']].append({
+                'course_outcome': item['course_outcome'],
+                'co_code': item['course_outcome__co_code'],
+                'average': round(float(item['avg']), 2) if item['avg'] is not None else None,
+            })
         rows = []
         for assessment in assessments:
-            marks = StudentMark.objects.filter(assessment=assessment)
-            overall = marks.aggregate(avg=Avg('marks_obtained'))['avg']
-            by_co = []
-            for item in marks.values('course_outcome', 'course_outcome__co_code').annotate(avg=Avg('marks_obtained')):
-                by_co.append({
-                    'course_outcome': item['course_outcome'],
-                    'co_code': item['course_outcome__co_code'],
-                    'average': round(float(item['avg']), 2) if item['avg'] is not None else None,
-                })
+            stats = overall_map.get(assessment.id) or {}
+            overall = stats.get('avg')
             rows.append({
                 'id': assessment.id,
                 'assessment_type': assessment.assessment_type,
                 'max_marks': assessment.max_marks,
                 'class_average': round(float(overall), 2) if overall is not None else None,
-                'entry_count': marks.count(),
-                'by_co': by_co,
+                'entry_count': stats.get('n') or 0,
+                'by_co': by_co_map.get(assessment.id, []),
             })
         return Response({
-            'course': int(course_id),
+            'course': course_id,
             'student_count': faculty_scope(request.user, Student.objects.filter(course_id=course_id)).count(),
             'assessments': rows,
         })
@@ -107,10 +115,10 @@ class StudentViewSet(viewsets.ModelViewSet):
     @action(detail=False, methods=['post'])
     def bulk(self, request):
         """Create/update roster rows in the given order (Excel / paste import)."""
-        course_id = request.data.get('course')
         rows = request.data.get('students') or []
-        if not course_id:
+        if not request.data.get('course'):
             return Response({'error': 'course is required'}, status=400)
+        course_id = parse_pk(request.data.get('course'), 'course')
         course = Course.objects.filter(pk=course_id).first()
         if not course:
             return Response({'error': 'Course not found.'}, status=404)

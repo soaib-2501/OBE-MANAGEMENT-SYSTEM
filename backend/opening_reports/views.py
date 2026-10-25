@@ -3,6 +3,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from attainments.models import HistoricalCoAttainment
+from attainments.scope import offering_identity
 from attainments.year_utils import previous_academic_year
 from courses.models import Course
 from courses.serializers import CourseSerializer
@@ -21,8 +22,7 @@ def historical_years_for(course):
     return sorted(
         set(
             HistoricalCoAttainment.objects.filter(
-                course_code=course.course_code,
-                semester=course.semester,
+                offering_identity(course),
             ).values_list('academic_year', flat=True)
         ),
         reverse=True,

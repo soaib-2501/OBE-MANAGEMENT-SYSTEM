@@ -3,6 +3,12 @@ import { Link } from 'react-router-dom';
 import api from '../api/client';
 import { useAuth } from '../context/AuthContext';
 import { coordinatorName, teachingFacultyName } from '../utils/offering';
+import {
+  catalogEntryMatchingProgramme,
+  departmentFromProgramme,
+  programmeCounts,
+  programmesForCatalogChoice,
+} from '../utils/programmeMatch';
 
 const emptyForm = {
   academic_session: '',
@@ -10,6 +16,9 @@ const emptyForm = {
   teaching_faculty: '',
   course_coordinator: '',
   faculty: '',
+  programme: '',
+  program_name: '',
+  department: '',
   credits: 3,
   po_count: 3,
   pso_count: 2,
@@ -30,6 +39,7 @@ export default function Courses({ courseKind = 'THEORY' }) {
   const [directory, setDirectory] = useState([]);
   const [sessions, setSessions] = useState([]);
   const [catalog, setCatalog] = useState([]);
+  const [programmes, setProgrammes] = useState([]);
   const [sessionFilter, setSessionFilter] = useState('');
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState(null);
@@ -40,6 +50,7 @@ export default function Courses({ courseKind = 'THEORY' }) {
     api.get(`/courses/?course_kind=${courseKind}`).then((res) => setCourses(res.data.results ?? res.data));
     api.get('/courses/sessions/').then((res) => setSessions(res.data.results ?? res.data)).catch(() => {});
     api.get('/courses/faculty-directory/?active=1').then((res) => setDirectory(res.data.results ?? res.data)).catch(() => {});
+    api.get('/programs/').then((res) => setProgrammes(res.data.results ?? res.data)).catch(() => setProgrammes([]));
     if (isAdmin) {
       api.get('/auth/users/?role=FACULTY').then((res) => setLoginFaculty(res.data.results ?? res.data));
     }
@@ -57,6 +68,23 @@ export default function Courses({ courseKind = 'THEORY' }) {
       .catch(() => setCatalog([]));
   }, [form.academic_session, courseKind]);
 
+  useEffect(() => {
+    if (editingId || !showForm || !form.catalog_entry || !programmes.length || !catalog.length) return;
+    setForm((prev) => {
+      if (prev.programme) return prev;
+      const next = formFromNba(prev, prev.catalog_entry);
+      if (
+        next.programme === prev.programme
+        && next.program_name === prev.program_name
+        && next.po_count === prev.po_count
+        && next.pso_count === prev.pso_count
+      ) {
+        return prev;
+      }
+      return next;
+    });
+  }, [programmes, catalog, showForm, editingId, form.catalog_entry]);
+
   const selected = catalog.find((c) => String(c.id) === String(form.catalog_entry));
   const filterSessions = [...new Set(courses.map((c) => c.session_label || c.academic_year).filter(Boolean))];
   const visible = sessionFilter
@@ -70,6 +98,97 @@ export default function Courses({ courseKind = 'THEORY' }) {
       .map((campus) => ({ campus, label: labels[campus], rows: directory.filter((f) => f.campus === campus) }))
       .filter((g) => g.rows.length);
   }, [directory]);
+
+  const programmeMatches = useMemo(
+    () => programmesForCatalogChoice(selected, catalog, programmes),
+    [selected, catalog, programmes],
+  );
+
+  function formFromNba(prev, entryId) {
+    const row = catalog.find((c) => String(c.id) === String(entryId));
+    const matches = programmesForCatalogChoice(row, catalog, programmes);
+    let programmeId = prev.programme;
+    if (matches.length === 1) programmeId = String(matches[0].id);
+    else if (matches.length > 1) {
+      if (!matches.some((p) => String(p.id) === String(programmeId))) programmeId = '';
+    } else {
+      programmeId = '';
+    }
+    const chosen = matches.find((p) => String(p.id) === String(programmeId));
+    return applyProgrammeChoice(prev, chosen, entryId);
+  }
+
+  function applyProgrammeChoice(prev, chosen, entryId) {
+    const current = catalog.find((c) => String(c.id) === String(entryId || prev.catalog_entry));
+    const matched = catalogEntryMatchingProgramme(chosen, current, catalog);
+    const next = {
+      ...prev,
+      catalog_entry: matched ? String(matched.id) : (entryId || prev.catalog_entry),
+      programme: chosen ? String(chosen.id) : '',
+    };
+    if (chosen) {
+      const counts = programmeCounts(chosen);
+      next.program_name = chosen.name;
+      next.department = departmentFromProgramme(chosen);
+      next.po_count = counts.po_count ?? prev.po_count;
+      next.pso_count = counts.pso_count ?? prev.pso_count;
+    } else {
+      next.program_name = current?.program_name || '';
+      next.department = prev.department || '';
+    }
+    return next;
+  }
+
+  function pickProgramme(programmeId) {
+    const chosen = programmes.find((p) => String(p.id) === String(programmeId));
+    setForm((prev) => applyProgrammeChoice(prev, chosen, prev.catalog_entry));
+  }
+
+  function sameSession(course) {
+    if (form.academic_session && course.academic_session
+      && String(course.academic_session) === String(form.academic_session)) {
+      return true;
+    }
+    const sess = sessions.find((s) => String(s.id) === String(form.academic_session));
+    return Boolean(sess && (course.session_label === sess.label || course.academic_year === sess.label));
+  }
+
+  function findExistingOffering() {
+    const row = catalog.find((c) => String(c.id) === String(form.catalog_entry));
+    const code = row?.course_code;
+    return courses.find((c) => {
+      if (isAdmin) {
+        const owner = form.faculty ? String(form.faculty) : '';
+        const courseOwner = c.faculty ? String(c.faculty) : '';
+        if (owner !== courseOwner) return false;
+      }
+      if (!sameSession(c)) return false;
+      const sameSubject = (
+        (form.catalog_entry && String(c.catalog_entry) === String(form.catalog_entry))
+        || (code && c.course_code === code)
+      );
+      if (!sameSubject) return false;
+      if (!form.programme) return true;
+      if (!c.programme) return true;
+      return String(c.programme) === String(form.programme);
+    });
+  }
+
+  function formatApiError(err, fallback) {
+    const data = err.response?.data;
+    if (!data) return fallback;
+    if (typeof data === 'string') return data;
+    if (Array.isArray(data)) return data.filter(Boolean).join(' ');
+    if (data.detail) return String(data.detail);
+    if (data.non_field_errors) return [].concat(data.non_field_errors).join(' ');
+    try {
+      return Object.entries(data)
+        .map(([key, value]) => `${key}: ${[].concat(value).join(' ')}`)
+        .join(' ');
+    } catch {
+      return fallback;
+    }
+  }
 
   function resetForm() {
     setShowForm(false);
@@ -90,6 +209,9 @@ export default function Courses({ courseKind = 'THEORY' }) {
       teaching_faculty: c.teaching_faculty || '',
       course_coordinator: c.course_coordinator || '',
       faculty: c.faculty ?? '',
+      programme: c.programme ?? '',
+      program_name: c.program_name || '',
+      department: c.department || '',
       credits: c.credits ?? 3,
       po_count: c.po_count ?? 3,
       pso_count: c.pso_count ?? 2,
@@ -100,6 +222,10 @@ export default function Courses({ courseKind = 'THEORY' }) {
   async function handleSubmit(e) {
     e.preventDefault();
     setError('');
+    if (programmeMatches.length > 1 && !form.programme) {
+      setError('This NBA subject is used by more than one programme. Choose CSE or IT (or the matching programme) before saving.');
+      return;
+    }
     const payload = {
       course_kind: courseKind,
       catalog_entry: form.catalog_entry ? Number(form.catalog_entry) : null,
@@ -109,20 +235,25 @@ export default function Courses({ courseKind = 'THEORY' }) {
       credits: Number(form.credits) || 3,
       po_count: Number(form.po_count) || 3,
       pso_count: Number(form.pso_count) || 0,
+      programme: form.programme ? Number(form.programme) : null,
+      program_name: form.program_name || undefined,
+      department: form.department || undefined,
     };
     if (isAdmin) {
       payload.faculty = form.faculty ? Number(form.faculty) : null;
     }
     try {
-      if (editingId) {
-        await api.patch(`/courses/${editingId}/`, payload);
+      const existing = !editingId ? findExistingOffering() : null;
+      const targetId = editingId || existing?.id;
+      if (targetId) {
+        await api.patch(`/courses/${targetId}/`, payload);
       } else {
         await api.post('/courses/', { ...payload, outcomes: [] });
       }
       resetForm();
       load();
     } catch (err) {
-      setError(JSON.stringify(err.response?.data || 'Failed to save course'));
+      setError(formatApiError(err, 'Failed to save course'));
     }
   }
 
@@ -136,7 +267,7 @@ export default function Courses({ courseKind = 'THEORY' }) {
       if (editingId === c.id) resetForm();
       load();
     } catch (err) {
-      setError(JSON.stringify(err.response?.data || 'Failed to delete course'));
+      setError(formatApiError(err, 'Failed to delete course'));
     }
   }
 
@@ -169,7 +300,14 @@ export default function Courses({ courseKind = 'THEORY' }) {
           <label className="block text-sm col-span-2">
             <span className="block text-xs font-medium text-slate-600 mb-1">Session</span>
             <select className="w-full border rounded px-3 py-2 text-sm" required value={form.academic_session}
-              onChange={(e) => setForm({ ...form, academic_session: e.target.value, catalog_entry: '' })}>
+              onChange={(e) => setForm({
+                ...form,
+                academic_session: e.target.value,
+                catalog_entry: '',
+                programme: '',
+                program_name: '',
+                department: '',
+              })}>
               <option value="">Select 2026 Odd / 2026 Even …</option>
               {sessions.map((s) => <option key={s.id} value={s.id}>{s.label}</option>)}
             </select>
@@ -177,7 +315,7 @@ export default function Courses({ courseKind = 'THEORY' }) {
           <label className="block text-sm col-span-2">
             <span className="block text-xs font-medium text-slate-600 mb-1">NBA code / subject</span>
             <select className="w-full border rounded px-3 py-2 text-sm" required value={form.catalog_entry}
-              onChange={(e) => setForm({ ...form, catalog_entry: e.target.value })}>
+              onChange={(e) => setForm((prev) => formFromNba(prev, e.target.value))}>
               <option value="">{isLab ? 'Select lab NBA subject' : 'Select NBA subject'}</option>
               {catalog.map((row) => (
                 <option key={row.id} value={row.id}>{row.label}</option>
@@ -186,15 +324,54 @@ export default function Courses({ courseKind = 'THEORY' }) {
           </label>
           {selected && (
             <div className="col-span-2 grid grid-cols-2 gap-2 text-sm bg-slate-50 border rounded p-3">
-              <p><span className="text-slate-500">Program:</span> {selected.program_name}</p>
+              <p>
+                <span className="text-slate-500">Program:</span>{' '}
+                {form.program_name || selected.program_name}
+              </p>
               <p><span className="text-slate-500">NBA:</span> {selected.nba_code}</p>
               <p className="col-span-2"><span className="text-slate-500">Course:</span> {selected.course_name} ({selected.course_code})</p>
               <p><span className="text-slate-500">Year of study:</span> {selected.year_of_study}</p>
               <p><span className="text-slate-500">Semester no.:</span> {selected.semester_number}</p>
+              {form.program_name && form.program_name !== selected.program_name && (
+                <p className="col-span-2 text-xs text-slate-500">
+                  NBA lists this subject as {selected.program_name}. Course documents will use {form.program_name}.
+                </p>
+              )}
             </div>
           )}
+          {programmeMatches.length > 1 && (
+            <div className="col-span-2 rounded border border-amber-200 bg-amber-50 p-3">
+              <p className="text-sm font-medium text-amber-950">This subject is listed for more than one programme.</p>
+              <p className="text-xs text-amber-800 mt-1">
+                Choose CSE or IT so the course program name, department, and PO/PSO counts fill from Programs. You can still edit the numbers after that.
+              </p>
+              <div className="flex flex-wrap gap-2 mt-3">
+                {programmeMatches.map((p) => (
+                  <label key={p.id} className={`text-sm border rounded px-3 py-1.5 cursor-pointer ${String(form.programme) === String(p.id) ? 'bg-slate-900 text-white border-slate-900' : 'bg-white'}`}>
+                    <input type="radio" className="sr-only" name="programme" value={p.id}
+                      checked={String(form.programme) === String(p.id)}
+                      onChange={() => pickProgramme(p.id)} />
+                    {p.name}
+                  </label>
+                ))}
+              </div>
+              {form.programme && (
+                <p className="text-xs text-amber-900 mt-2">
+                  Using {form.program_name}
+                  {form.department ? ` · ${form.department}` : ''}
+                  {' '}({form.po_count} POs, {form.pso_count} PSOs).
+                </p>
+              )}
+            </div>
+          )}
+          {programmeMatches.length === 1 && (
+            <p className="col-span-2 text-xs text-slate-500">
+              PO/PSO counts filled from {programmeMatches[0].name}
+              {' '}({programmeCounts(programmeMatches[0]).po_count} POs, {programmeCounts(programmeMatches[0]).pso_count} PSOs). You can edit them.
+            </p>
+          )}
           <label className="block text-sm">
-            <span className="block text-xs font-medium text-slate-600 mb-1">Faculty name</span>
+            <span className="block text-xs font-medium text-slate-600 mb-1">Faculty name (on documents)</span>
             <select className="w-full border rounded px-3 py-2 text-sm" required value={form.teaching_faculty}
               onChange={(e) => setForm({ ...form, teaching_faculty: e.target.value })}>
               <option value="">Select faculty</option>

@@ -31,7 +31,15 @@ export function AuthProvider({ children }) {
     return userInfo;
   }
 
-  function logout() {
+  async function logout() {
+    const refresh = localStorage.getItem('refresh_token');
+    try {
+      if (refresh) {
+        await api.post('/auth/logout/', { refresh });
+      }
+    } catch {
+      // Token may already be invalid; still clear local session.
+    }
     localStorage.removeItem('access_token');
     localStorage.removeItem('refresh_token');
     localStorage.removeItem('obe_user');

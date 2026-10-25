@@ -1,11 +1,15 @@
+import logging
 from copy import deepcopy
 
 from attainments.models import Attainment, HistoricalCoAttainment, ProgramAttainment
+from attainments.scope import offering_identity
 from attainments.services import build_sheet, calculate_for_course
 from attainments.year_utils import previous_academic_year
 from opening_reports.models import OpeningReport
 
 from .history import compact_year, dummy_values_for_year, prior_years
+
+logger = logging.getLogger(__name__)
 from .models import (
     DEFAULT_BRIGHT_ACTIONS,
     DEFAULT_WEAK_ACTIONS,
@@ -59,10 +63,7 @@ def collect_history(course):
     by_year = {}
     stored = set()
 
-    snaps = ClosingYearSnapshot.objects.filter(
-        course_code=course.course_code,
-        semester=course.semester,
-    )
+    snaps = ClosingYearSnapshot.objects.filter(offering_identity(course))
     for snap in snaps:
         by_year[snap.academic_year] = {
             'cos': dict(snap.co_attainments or {}),
@@ -71,10 +72,7 @@ def collect_history(course):
         }
         stored.add(snap.academic_year)
 
-    hist = HistoricalCoAttainment.objects.filter(
-        course_code=course.course_code,
-        semester=course.semester,
-    )
+    hist = HistoricalCoAttainment.objects.filter(offering_identity(course))
     for rec in hist:
         slot = by_year.setdefault(rec.academic_year, {'cos': {}, 'pos': {}, 'source': 'COMPUTED'})
         slot['cos'][rec.co_code] = fmt_num(rec.attainment)
@@ -95,6 +93,7 @@ def seed_dummy_history(course):
             course_code=course.course_code,
             academic_year=year,
             semester=course.semester,
+            faculty=course.faculty,
             defaults={
                 'nba_code': course.nba_code or '',
                 'co_attainments': cos,
@@ -162,8 +161,9 @@ def build_synced(course):
 
     try:
         calculate_for_course(course.id)
-        sheet = build_sheet(course)
+        sheet = build_sheet(course) or {}
     except Exception:
+        logger.exception('Could not build attainment sheet for course %s', course.id)
         sheet = {}
 
     co_current = {}

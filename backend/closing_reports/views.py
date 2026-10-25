@@ -110,6 +110,7 @@ class ClosingYearSnapshotView(APIView):
             course_code=course.course_code,
             academic_year=year,
             semester=request.data.get('semester') or course.semester,
+            faculty=course.faculty,
             defaults={
                 'nba_code': request.data.get('nba_code') or course.nba_code or '',
                 'co_attainments': request.data.get('co_attainments') or {},

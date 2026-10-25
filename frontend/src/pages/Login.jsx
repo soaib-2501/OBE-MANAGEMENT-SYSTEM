@@ -1,5 +1,6 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
+import api from '../api/client';
 import { useAuth } from '../context/AuthContext';
 
 export default function Login() {
@@ -7,8 +8,15 @@ export default function Login() {
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [signupOpen, setSignupOpen] = useState(false);
   const { login } = useAuth();
   const navigate = useNavigate();
+
+  useEffect(() => {
+    api.get('/auth/signup/').then((res) => {
+      setSignupOpen(Boolean(res.data.signup_open || res.data.admin_signup_open));
+    }).catch(() => setSignupOpen(false));
+  }, []);
 
   async function handleSubmit(e) {
     e.preventDefault();
@@ -59,10 +67,12 @@ export default function Login() {
           {loading ? 'Signing in…' : 'Sign In'}
         </button>
 
-        <p className="text-sm text-slate-500 mt-4 text-center">
-          New here?{' '}
-          <Link to="/signup" className="text-slate-900 font-semibold hover:underline">Create an account</Link>
-        </p>
+        {signupOpen && (
+          <p className="text-sm text-slate-500 mt-4 text-center">
+            First-time setup?{' '}
+            <Link to="/signup" className="text-slate-900 font-semibold hover:underline">Create the administrator</Link>
+          </p>
+        )}
       </form>
     </div>
   );

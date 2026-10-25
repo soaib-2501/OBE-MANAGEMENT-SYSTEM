@@ -1,71 +1,71 @@
 # OBE Management System
 
-Standalone web platform for **Outcome-Based Education** course offerings: Course Description, Opening Report, Assessment Tools, Students & Marks, and CO/PO/PSO attainment.
+Standalone web app for **Outcome-Based Education** course offerings: Course Description, Opening Report, Assessment Tools, Students & Marks, Closing Report, and CO/PO/PSO attainment.
 
-This system is **independent**. It has its own UI, APIs, authentication, and database. It does not connect to or share data with any other OBE project.
+It has its own UI, APIs, authentication, and database. It does not share data with any other OBE project.
 
 ```
-React (Vite + Tailwind)  →  Django REST + JWT  →  PostgreSQL (Neon)
+React (Vite + Tailwind)  →  Django REST + JWT  →  PostgreSQL
 ```
 
 ## Roles
 
 | Role | Access |
 |------|--------|
-| **ADMIN** | All courses, user management (create faculty/admin accounts) |
-| **FACULTY** | Only their own course offerings |
+| **ADMIN** | All courses, catalog, programmes, user management |
+| **FACULTY** | Only courses they own (login account) |
 
-A course offering is unique per **`(course_code, academic_year, faculty)`**. The same subject in a new session is a new Course row.
+Public signup creates the **first administrator only**. After that, faculty logins are created by an admin on **Users**.
+
+A course has two people:
+
+- **Login owner** (`faculty`) — who can edit the offering (always the signed-in faculty)
+- **Faculty name** (`teaching_faculty`) — name printed on CD / OR / AT / CR documents
+- **Course coordinator** — name printed as coordinator
+
+Offerings are unique per **`(course_code, academic year, login faculty, programme)`**. The same NBA subject can exist as B.Tech CSE and B.Tech IT for the same teacher in one session.
 
 ## What the app does
 
+### Admin: Catalog
+Sessions (e.g. **2026 Odd** / **2026 Even**), NBA subjects, and the faculty directory (Sector-62 / Sector-128). Seed from Excel with `python manage.py seed_catalog`.
+
+### Admin: Programs
+PO/PSO catalogues for **B.Tech (CSE)**, **B.Tech (IT)**, **M.Tech (CSE)**, **M.Tech (AIDS)**. When a faculty picks an NBA subject, PO/PSO counts fill from the matching programme (still editable). If NBA lists the subject as CSE and IT, they must choose CSE or IT before save.
+
+### Courses / Lab Courses
+Create an offering: session → NBA subject → programme (if needed) → teaching faculty and coordinator. Theory subjects live under **Courses**; names that contain `LAB` live under **Lab Courses**.
+
 ### Course Description
-Faculty enter and save syllabus data, then preview / print / save as PDF:
-
-- Header (title, institute), basic info (code, name, program, department, semester, session, NBA code)
-- Coordinator names, course outcomes (COs) and cognitive levels
-- Lecture-wise breakup, evaluation criteria, PBL, textbooks / reference books
-- CO–PO–PSO mapping (level 0–3 + justification). PO/PSO counts are editable (e.g. B.Tech vs M.Tech)
-
-COs and mapping live on the Course. Other documents **read** this data; they do not duplicate it.
+Syllabus for this offering: header, COs and Bloom levels, lecture-wise breakup, evaluation, PBL, books, CO–PO–PSO mapping (level 0–3 + justification). Other documents **read** this data.
 
 ### Opening Report
-Synced from Course Description (header, COs, mapping). Faculty fill report-only fields:
-
-- Gaps / modifications in syllabus (or NIL)
-- Previous-year CO attainment (loaded from historical records, not invented)
-- **Target attainment** per CO (faculty-set; optional suggested average from loaded years)
-- Actions to improve CO attainment; Strengthens POs/PSOs from mapping (`level > 0`)
-- Teaching methods, weak/bright strategies, evaluation strategy, appendix (guidelines, efforts, impact)
-
-Preview and **Print / Save as PDF** use the same document layout as Course Description.
-
-Historical attainment is keyed by **`course_code + academic_year + semester + co_code`**, not the current Course PK, so last year’s offering still applies.
+Synced from Course Description. Faculty set targets, previous-year CO attainment, teaching methods, weak/bright strategies. History is scoped to **this faculty’s** offering of the subject, not every teacher of the same NBA code.
 
 ### Assessment Tools
-Header fields come from Course Description (programme, year, Odd/Even, course, NBA code, coordinator). Faculty add tools (T-1, T-2, T-3 / mid-sem / end-sem) and questions. Selecting a CO fills the question’s Bloom level from that CO; faculty can override and add remarks. Saved on this offering only.
+Question ↔ CO tools for T1/T2/T3 (theory) or Mid/End/D2D (lab). Stored per offering.
 
 ### Students & Marks
-Shared roster for T1, T2, T3, TA / Project, and CO Feedback. Faculty (and admin on the same page) can:
+Shared roster for T1, T2, T3, TA, and exit survey (labs: Mid, End, D2D, feedback).
 
-- Add students one-by-one, paste `enrol, name` lines, or **Upload Excel** (`.xlsx` / `.xls` / `.csv`)
-- Excel roster order is kept as S.No; **Remove** still works on every row
-- Enter marks in the grid, or **Upload Excel** on each exam tab (Enrol No, Name, Q1, Q2, …). Cells stay editable after upload
-- Each exam tab shows that exam’s CO summary; the **Attainment** sub-tab under Students & Marks is the overall CO / PO-PSO picture (Direct, Indirect, Final, charts)
+- Add students, paste `enrol, name`, or **Upload Excel** (`.xlsx` / `.xls` / `.csv`)
+- Enter marks in the grid or upload Excel per exam tab
+- **Attainment** sub-tab: Direct / Indirect / Final, charts, PO/PSO
 
-Roster/marks Excel is parsed in the **frontend** (`xlsx`). Catalog seed Excel still uses backend `openpyxl`.
+Formulas:
 
-CO/PO formulas (on that Attainment sub-tab):
+- Direct = 60% tests + 20% assignment
+- Indirect = 20% course-exit feedback
+- Final = direct + indirect; level 0–3 from percentage
+- PO/PSO from CO attainment × mapping strength
 
-- Direct = 60% tests (T1/T2/T3) + 20% assignment  
-- Indirect = 20% course-exit feedback  
-- Final = direct + indirect; level 0–3 from percentage  
-- PO/PSO attainment from CO attainment × mapping strength  
+Roster/marks Excel is parsed in the **frontend** (`xlsx`). Catalog seed Excel uses backend `openpyxl`.
 
-### Also included
-- **Assessment Tools** document (question ↔ CO mapping, stored per offering)
-- Dashboard
-- Admin user management  
+### Closing Report
+End-of-course report with current CO/PO figures, grade distribution, and previous-year snapshots (per faculty + subject + session).
+
+### Dashboard
+Course counts, pending attainment, and level distribution for the signed-in user (or all courses for admin).
 
 ## Folder structure
 
@@ -75,20 +75,22 @@ obe-part2/
 │   ├── manage.py
 │   ├── requirements.txt
 │   ├── .env.example
-│   ├── obe_backend/              # settings, URLs, dashboard
-│   ├── users/                    # JWT auth, ADMIN | FACULTY
-│   ├── courses/                  # Course, COs, mapping, modules, books
-│   ├── assessments/              # Assessment, Student (sort_order), StudentMark, bulk roster API
-│   ├── attainments/              # CO/PO calculation + HistoricalCoAttainment
-│   ├── opening_reports/          # OpeningReport (OneToOne Course)
-│   └── assessment_tools/         # Assessment Tools document (OneToOne Course)
+│   ├── obe_backend/          # settings, URLs, dashboard
+│   ├── users/                # JWT auth, ADMIN | FACULTY
+│   ├── courses/              # sessions, NBA catalog, faculty directory, Course, COs, mapping
+│   ├── programs/             # Programme PO/PSO catalogues
+│   ├── assessments/          # exams, roster, marks
+│   ├── attainments/          # CO/PO calculation + historical CO (per faculty)
+│   ├── opening_reports/
+│   ├── assessment_tools/
+│   └── closing_reports/
 ├── frontend/
 │   └── src/
-│       ├── api/client.js         # axios + JWT refresh
+│       ├── api/client.js     # axios + JWT refresh queue
 │       ├── context/AuthContext.jsx
-│       ├── components/           # Navbar, CourseSubnav, ProtectedRoute
-│       └── pages/                # Login, Courses, Course Description,
-│                                 # Opening Report, Assessment Tools, Marks, …
+│       ├── pages/            # Login, Courses, Lab Courses, CD, OR, AT, Marks, CR, admin
+│       └── components/
+├── data/                     # optional Excel for seed_catalog
 └── README.md
 ```
 
@@ -96,21 +98,25 @@ obe-part2/
 
 | Area | Path |
 |------|------|
-| Auth / users | `/auth/` |
+| Auth / users | `/auth/` (login, refresh, logout, signup, me, users) |
 | Dashboard | `/dashboard/` |
 | Courses, COs, mappings | `/courses/` |
 | Sessions / NBA catalog / faculty directory | `/courses/sessions/`, `/courses/catalog/`, `/courses/faculty-directory/` |
+| Programmes | `/programs/` |
 | Opening report | `/opening-reports/<course_id>/` |
 | Assessment tools | `/assessment-tools/<course_id>/` |
+| Closing report | `/closing-reports/<course_id>/` |
 | Assessments, students, marks | `/assessments/` |
-| Bulk roster import (Excel order) | `POST /assessments/students/bulk/` |
-| CO/PO attainment + calculate | `/attainments/` |
-| Historical CO attainment | `/attainments/historical/?course=&academic_year=` |
+| Bulk roster | `POST /assessments/students/bulk/` |
+| CO/PO attainment | `/attainments/` |
+| Historical CO | `/attainments/historical/?course=&academic_year=` |
+
+Protected routes use JWT. Access tokens last **15 minutes**; the frontend refreshes with the refresh token. `POST /auth/logout/` blacklists the refresh token.
 
 ## First-time setup
 
 ### 1. Database
-Use **PostgreSQL** (Neon is configured via `DATABASE_URL`). Create a dedicated database for this project.
+PostgreSQL (Neon or local). Point `DATABASE_URL` at a dedicated database.
 
 ### 2. Backend
 
@@ -119,40 +125,55 @@ cd backend
 python -m venv venv
 venv\Scripts\activate              # macOS/Linux: source venv/bin/activate
 pip install -r requirements.txt
-copy .env.example .env             # set DATABASE_URL, SECRET_KEY
-python manage.py migrate           # includes student sort_order for Excel roster sequence
-python manage.py createsuperuser   # first Admin
+copy .env.example .env             # set SECRET_KEY and DATABASE_URL
+python manage.py migrate
 python manage.py runserver         # http://localhost:8000
+```
+
+`SECRET_KEY` is required (no default). Set `DEBUG=true` only for local development.
+
+Optional catalog seed (needs `data/NBA codes-ODD 2026.xlsx` and `data/data.xlsx`):
+
+```bash
+python manage.py seed_catalog --year 2026 --semester ODD
 ```
 
 ### 3. Frontend
 
 ```bash
 cd frontend
-npm install                        # includes xlsx for roster/marks Excel upload
+npm install
 copy .env.example .env             # default: http://localhost:8000/api
 npm run dev                        # http://localhost:5173
 ```
 
-Sign in at `http://localhost:5173`. Faculty accounts are created by an Admin on **Users**.
+Open `http://localhost:5173`. If no admin exists, **Create the administrator** on the login page. Add faculty from **Users**.
 
 ## Typical course workflow
 
-1. **Admin → Catalog** — add session (e.g. 2026 Odd), NBA subjects, faculty (Sector-62 / 128). Seed Excel with `python manage.py seed_catalog`.  
-2. **Courses** — pick session, NBA subject (program/code/name auto-fill), faculty name, course coordinator; Save.  
-3. **Course Description** — fill COs, mapping, syllabus; Save; Print if needed.  
-4. **Opening Report** — confirm synced CD data; set targets; Save; Print.  
-5. **Assessment Tools** — add T-1 / T-2 / T-3 (or mid/end sem) and questions; Save; Print.  
-6. **Students & Marks** — roster + marks (manual or **Upload Excel**). Per-exam CO summary is on T1/T2/T3/TA/Feedback; overall CO/PO-PSO is the Attainment sub-tab. Recalculate there.
+1. **Admin → Catalog** — session, NBA subjects, faculty directory (`seed_catalog` if you have the Excel files).
+2. **Admin → Programs** — confirm PO/PSO text for CSE / IT / M.Tech.
+3. **Courses** or **Lab Courses** — session, NBA subject, CSE vs IT if asked, **Faculty name (on documents)**, coordinator; Create.
+4. **Course Description** — COs, mapping, syllabus; Save; Print.
+5. **Opening Report** — targets and strategies; Save; Print.
+6. **Assessment Tools** — questions ↔ COs; Save; Print.
+7. **Students & Marks** — roster and marks (or Excel); Attainment tab; Recalculate.
+8. **Closing Report** — review synced figures; Save; Print.
 
-Print / Save as PDF uses the browser print dialog (A4). Choose “Save as PDF” as the destination.
+Print uses the browser dialog (A4). Choose **Save as PDF** as the destination.
 
 ## Environment
 
-**Backend `.env`** (see `backend/.env.example`):
+**Backend** (`backend/.env`, see `.env.example`):
 
-- `SECRET_KEY`, `DEBUG`  
-- `DATABASE_URL` — Neon Postgres  
-- `CORS_ALLOWED_ORIGINS` — e.g. `http://localhost:5173`  
+- `SECRET_KEY` — required
+- `DEBUG` — `true` locally, `false` in production
+- `DATABASE_URL` — Postgres
+- `CORS_ALLOWED_ORIGINS` — e.g. `http://localhost:5173`
+- `ALLOWED_HOSTS` — optional; defaults to `localhost,127.0.0.1`
 
-**Frontend `.env`:** `VITE_API_BASE_URL=http://localhost:8000/api`
+**Frontend** (`frontend/.env`):
+
+```
+VITE_API_BASE_URL=http://localhost:8000/api
+```

@@ -1,7 +1,9 @@
 from rest_framework import viewsets, permissions
 from rest_framework.decorators import action
 from rest_framework.response import Response
+from obe_backend.http import parse_pk
 from .models import Attainment, HistoricalCoAttainment, ProgramAttainment
+from .scope import offering_identity
 from .serializers import AttainmentSerializer, ProgramAttainmentSerializer
 from .services import calculate_for_course
 from .year_utils import previous_academic_year
@@ -39,9 +41,9 @@ class AttainmentViewSet(viewsets.ReadOnlyModelViewSet):
     def calculate(self, request):
         """POST { "course": <id> } -> recalculates CO and PO/PSO attainment."""
         from courses.models import Course
-        course_id = request.data.get('course')
-        if not course_id:
+        if not request.data.get('course'):
             return Response({'error': 'course is required'}, status=400)
+        course_id = parse_pk(request.data.get('course'), 'course')
         course = Course.objects.filter(pk=course_id).first()
         if not course:
             return Response({'error': 'Course not found.'}, status=404)
@@ -57,9 +59,9 @@ class AttainmentViewSet(viewsets.ReadOnlyModelViewSet):
     def sheet(self, request):
         from courses.models import Course
         from .services import build_sheet
-        course_id = request.query_params.get('course')
-        if not course_id:
+        if not request.query_params.get('course'):
             return Response({'error': 'course is required'}, status=400)
+        course_id = parse_pk(request.query_params.get('course'), 'course')
         course = Course.objects.filter(pk=course_id).first()
         if not course:
             return Response({'error': 'Course not found.'}, status=404)
@@ -70,19 +72,16 @@ class AttainmentViewSet(viewsets.ReadOnlyModelViewSet):
     @action(detail=False, methods=['get'])
     def historical(self, request):
         from courses.models import Course
-        course_id = request.query_params.get('course')
-        if not course_id:
+        if not request.query_params.get('course'):
             return Response({'error': 'course is required'}, status=400)
+        course_id = parse_pk(request.query_params.get('course'), 'course')
         course = Course.objects.filter(pk=course_id).first()
         if not course:
             return Response({'error': 'Course not found.'}, status=404)
         if request.user.is_faculty_role and course.faculty_id != request.user.id:
             return Response({'error': 'Not allowed.'}, status=403)
         year = request.query_params.get('academic_year') or previous_academic_year(course.academic_year)
-        base = HistoricalCoAttainment.objects.filter(
-            course_code=course.course_code,
-            semester=course.semester,
-        )
+        base = HistoricalCoAttainment.objects.filter(offering_identity(course))
         available_years = sorted(set(base.values_list('academic_year', flat=True)), reverse=True)
         records = []
         if year:

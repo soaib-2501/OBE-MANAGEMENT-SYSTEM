@@ -19,7 +19,7 @@ class ClosingYearSnapshotSerializer(serializers.ModelSerializer):
     class Meta:
         model = ClosingYearSnapshot
         fields = [
-            'id', 'course_code', 'nba_code', 'academic_year', 'semester',
+            'id', 'course_code', 'nba_code', 'academic_year', 'semester', 'faculty',
             'co_attainments', 'po_attainments', 'source', 'updated_at',
         ]
         read_only_fields = ['id', 'updated_at']

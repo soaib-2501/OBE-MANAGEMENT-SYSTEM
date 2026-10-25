@@ -157,7 +157,7 @@ def copy_catalog_from_previous(session):
 
 
 class Course(models.Model):
-    """One offering of a subject: unique per faculty + session (academic year)."""
+    """One offering of a subject: unique per faculty + session + programme."""
     class Semester(models.TextChoices):
         ODD = 'ODD', 'Odd'
         EVEN = 'EVEN', 'Even'
@@ -197,6 +197,10 @@ class Course(models.Model):
         FacultyProfile, on_delete=models.SET_NULL, null=True, blank=True,
         related_name='coordinated_offerings',
     )
+    programme = models.ForeignKey(
+        'programs.Programme', on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='courses',
+    )
 
     doc_title = models.CharField(max_length=255, default='Detailed Syllabus')
     institute = models.CharField(max_length=255, blank=True)
@@ -219,8 +223,8 @@ class Course(models.Model):
         ordering = ['-academic_year', 'course_code']
         constraints = [
             models.UniqueConstraint(
-                fields=['course_code', 'academic_year', 'faculty'],
-                name='unique_course_per_faculty_session',
+                fields=['course_code', 'academic_year', 'faculty', 'programme'],
+                name='unique_course_per_faculty_session_programme',
             ),
         ]
 
@@ -241,8 +245,6 @@ class Course(models.Model):
     def teaching_faculty_display(self):
         if self.teaching_faculty_id:
             return self.teaching_faculty.full_name
-        if self.faculty_id:
-            return self.faculty.get_full_name() or self.faculty.username
         return ''
 
     @property

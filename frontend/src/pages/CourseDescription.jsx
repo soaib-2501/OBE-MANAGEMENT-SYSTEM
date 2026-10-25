@@ -2,7 +2,6 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import api from '../api/client';
 import CourseSubnav from '../components/CourseSubnav';
-import { useAuth } from '../context/AuthContext';
 import { coordinatorName, coursesListLabel, coursesListPath, teachingFacultyName } from '../utils/offering';
 
 const LEVELS = ['REMEMBER', 'UNDERSTAND', 'APPLY', 'ANALYZE', 'EVALUATE', 'CREATE'];
@@ -51,7 +50,6 @@ function mappingFor(co, poKey) {
 
 export default function CourseDescription() {
   const { id } = useParams();
-  const { isAdmin } = useAuth();
   const [course, setCourse] = useState(null);
   const [facultyList, setFacultyList] = useState([]);
   const [form, setForm] = useState(emptyForm);
@@ -79,7 +77,7 @@ export default function CourseDescription() {
       institute_sub: c.institute_sub || '',
       logo_fallback: c.logo_fallback || 'LOGO',
       watermark_text: c.watermark_text || '',
-      coordinator_names: c.coordinator_names || c.faculty_name || '',
+      coordinator_names: c.coordinator_names || c.course_coordinator_name || '',
       t1_marks: c.t1_marks ?? 20,
       t2_marks: c.t2_marks ?? 20,
       end_sem_marks: c.end_sem_marks ?? 35,
@@ -103,13 +101,21 @@ export default function CourseDescription() {
   }, [id]);
 
   useEffect(() => {
-    if (isAdmin) {
-      api.get('/auth/users/?role=FACULTY').then((res) => setFacultyList(res.data.results ?? res.data));
-    }
-  }, [isAdmin]);
+    api.get('/courses/faculty-directory/?active=1')
+      .then((res) => setFacultyList(res.data.results ?? res.data))
+      .catch(() => setFacultyList([]));
+  }, []);
+
+  const directoryByCampus = useMemo(() => {
+    const order = ['SECTOR_62', 'SECTOR_128', 'UNKNOWN'];
+    const labels = { SECTOR_62: 'Sector-62', SECTOR_128: 'Sector-128', UNKNOWN: 'Other' };
+    return order
+      .map((campus) => ({ campus, label: labels[campus], rows: facultyList.filter((f) => f.campus === campus) }))
+      .filter((g) => g.rows.length);
+  }, [facultyList]);
 
   async function assignFaculty(facultyId) {
-    await api.patch(`/courses/${id}/`, { faculty: facultyId === '' ? null : Number(facultyId) });
+    await api.patch(`/courses/${id}/`, { teaching_faculty: facultyId === '' ? null : Number(facultyId) });
     await load();
   }
 
@@ -255,21 +261,21 @@ export default function CourseDescription() {
         {status && <div className="bg-emerald-50 text-emerald-800 text-sm rounded p-3 mb-4">{status}</div>}
 
         <div className="bg-white shadow rounded-lg p-4 mb-4 flex flex-wrap items-center gap-3">
-          <span className="text-sm text-slate-600">Assigned faculty login:</span>
-          {isAdmin ? (
-            <select
-              className="border rounded px-2 py-1.5 text-sm"
-              value={course.faculty ?? ''}
-              onChange={(e) => assignFaculty(e.target.value)}
-            >
-              <option value="">Unassigned</option>
-              {facultyList.map((f) => (
-                <option key={f.id} value={f.id}>{f.first_name} {f.last_name} (@{f.username})</option>
-              ))}
-            </select>
-          ) : (
-            <span className="text-sm font-medium text-slate-900">{course.faculty_name || 'Unassigned'}</span>
-          )}
+          <span className="text-sm text-slate-600">Assigned faculty:</span>
+          <select
+            className="border rounded px-2 py-1.5 text-sm min-w-[220px]"
+            value={course.teaching_faculty ?? ''}
+            onChange={(e) => assignFaculty(e.target.value)}
+          >
+            <option value="">Select faculty</option>
+            {directoryByCampus.map((g) => (
+              <optgroup key={g.campus} label={g.label}>
+                {g.rows.map((f) => (
+                  <option key={f.id} value={f.id}>{f.full_name}</option>
+                ))}
+              </optgroup>
+            ))}
+          </select>
         </div>
 
         <div className="flex flex-wrap gap-2 justify-end mb-4">
