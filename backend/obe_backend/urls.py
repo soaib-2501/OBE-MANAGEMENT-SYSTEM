@@ -16,4 +16,5 @@ urlpatterns = [
     path('api/opening-reports/', include('opening_reports.urls')),
     path('api/assessment-tools/', include('assessment_tools.urls')),
     path('api/closing-reports/', include('closing_reports.urls')),
+    path('api/programs/', include('programs.urls')),
 ]

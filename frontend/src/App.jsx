@@ -13,6 +13,7 @@ import CourseAssessmentTools from './pages/CourseAssessmentTools';
 import CourseClosingReport from './pages/CourseClosingReport';
 import Users from './pages/Users';
 import CatalogAdmin from './pages/CatalogAdmin';
+import ProgramsAdmin from './pages/ProgramsAdmin';
 
 function CourseHomeRedirect() {
   const { id } = useParams();
@@ -28,6 +29,7 @@ export default function App() {
         <Route path="/signup" element={<GuestRoute><Signup /></GuestRoute>} />
         <Route path="/" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
         <Route path="/users" element={<ProtectedRoute adminOnly><Users /></ProtectedRoute>} />
+        <Route path="/programs" element={<ProtectedRoute adminOnly><ProgramsAdmin /></ProtectedRoute>} />
         <Route path="/catalog" element={<ProtectedRoute adminOnly><CatalogAdmin /></ProtectedRoute>} />
         <Route path="/courses" element={<ProtectedRoute><Courses courseKind="THEORY" /></ProtectedRoute>} />
         <Route path="/lab-courses" element={<ProtectedRoute><Courses courseKind="LAB" /></ProtectedRoute>} />

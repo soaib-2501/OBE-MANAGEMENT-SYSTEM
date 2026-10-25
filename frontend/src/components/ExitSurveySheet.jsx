@@ -10,6 +10,13 @@ function compactYear(year) {
   return `${m[1]}-${end}`;
 }
 
+function shortCo(co, index) {
+  const code = String(co?.co_code || '');
+  const m = code.match(/(\d+)$/);
+  if (m) return `CO${Number(m[1])}`;
+  return code || `CO${index + 1}`;
+}
+
 export function formatExitSurveyRubric(co, course, index) {
   let code = '';
   if (co?.co_code && !/^CO\d+$/i.test(co.co_code)) {
@@ -60,19 +67,34 @@ export function exportExitSurveyExcel({ course, students, block, marksGrid, outc
 
   const allRows = [...headerRows, ...studentRows];
   const ws = XLSX.utils.aoa_to_sheet(allRows);
-
   ws['!cols'] = [
-    { wch: 28 }, // Email Address
-    { wch: 10 }, // Class
-    { wch: 24 }, // Name
-    { wch: 18 }, // Enrollment Number
+    { wch: 28 },
+    { wch: 10 },
+    { wch: 24 },
+    { wch: 18 },
     ...questions.map(() => ({ wch: 42 })),
   ];
-
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, 'Exit Survey');
-  const code = course?.course_code || 'Course';
-  XLSX.writeFile(wb, `Exit_Survey_${code}.xlsx`);
+  XLSX.writeFile(wb, `Exit_Survey_${course?.course_code || 'Course'}.xlsx`);
+}
+
+function HeaderBlock({ course, ay, sem, semBranch, coordinator }) {
+  return (
+    <div className="exit-head">
+      <p className="exit-inst">{course?.institute || 'JAYPEE INSTITUTE OF INFORMATION TECHNOLOGY'}</p>
+      <div className="exit-head-row">
+        <div>
+          <p>Academic Year : {ay} ({sem} Semester)</p>
+          <p>Semester/Branch: {semBranch}</p>
+          <p>Course Name and Code: {course?.course_name || ''} ({course?.course_code || ''})</p>
+          <p>NBA Code: {course?.nba_code || '—'}</p>
+          <p>Course Coordinator: {coordinator === '—' ? '' : coordinator}</p>
+        </div>
+        <p className="exit-form-title">Exit survey Form</p>
+      </div>
+    </div>
+  );
 }
 
 export default function ExitSurveySheet({
@@ -95,47 +117,49 @@ export default function ExitSurveySheet({
   const semBranch = `${course?.semester_label || `${course?.semester_number || 2} Sem`}/${branch}`;
   const coordinator = coordinatorName(course);
 
-  const stats = useMemo(() => {
-    return questions.map((q, idx) => {
-      let sum = 0;
-      let count = 0;
-      let countAtTarget = 0;
-      (students || []).forEach((s) => {
-        const raw = marksGrid[`${s.id}-${q.id}`];
-        if (raw !== undefined && raw !== '' && !Number.isNaN(Number(raw))) {
-          const num = Number(raw);
-          sum += num;
-          count += 1;
-          if (num >= 3) countAtTarget += 1;
-        }
-      });
-      const avg = count > 0 ? (sum / count).toFixed(2) : '—';
-      const pct = count > 0 ? ((countAtTarget / count) * 100).toFixed(1) : '—';
-      return { avg, pct, count, countAtTarget };
+  const coMeta = questions.map((q, idx) => {
+    const co = (outcomes || []).find((o) => Number(o.id) === Number(q.course_outcome)) || outcomes?.[idx];
+    return { q, co, idx, short: shortCo(co, idx), rubric: formatExitSurveyRubric(co, course, idx) };
+  });
+
+  const stats = useMemo(() => questions.map((q) => {
+    let sum = 0;
+    let count = 0;
+    let countAtTarget = 0;
+    (students || []).forEach((s) => {
+      const raw = marksGrid[`${s.id}-${q.id}`];
+      if (raw !== undefined && raw !== '' && !Number.isNaN(Number(raw))) {
+        const num = Number(raw);
+        sum += num;
+        count += 1;
+        if (num >= 3) countAtTarget += 1;
+      }
     });
-  }, [questions, students, marksGrid]);
+    return {
+      avg: count > 0 ? (sum / count).toFixed(2) : '—',
+      pct: count > 0 ? ((countAtTarget / count) * 100).toFixed(1) : '—',
+    };
+  }), [questions, students, marksGrid]);
 
   return (
-    <div className="space-y-4">
-      {/* Top Banner & Actions */}
-      <div className="bg-white shadow rounded-lg p-6 no-print">
-        <div className="flex flex-wrap justify-between items-center gap-3 mb-4">
+    <div className="space-y-5">
+      <div className="bg-white shadow rounded-lg p-5 no-print">
+        <div className="flex flex-wrap justify-between items-start gap-3 mb-3">
           <div>
             <h2 className="text-lg font-bold text-slate-900">Exit Survey (Indirect Assessment)</h2>
             <p className="text-xs text-slate-500">
-              Student ratings from 1 to 5. All students are populated from the course roster. You can edit cells directly or upload an Excel file.
+              Ratings 1–5. Roster names stay in order. Upload Excel with Email / Enrollment Number and CO columns — marks map by roll number.
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
             <button
               type="button"
               onClick={() => exportExitSurveyExcel({ course, students, block, marksGrid, outcomes })}
-              className="bg-slate-200 hover:bg-slate-300 text-slate-800 px-3 py-1.5 rounded text-xs font-semibold"
-              title="Download Excel sheet with exact template and roster students"
+              className="bg-slate-200 px-3 py-1.5 rounded text-xs font-semibold"
             >
               Download Template (Excel)
             </button>
-            <label className={`bg-slate-200 hover:bg-slate-300 text-slate-800 px-3 py-1.5 rounded text-xs font-semibold cursor-pointer ${uploading ? 'opacity-50 pointer-events-none' : ''}`}>
+            <label className={`bg-slate-200 px-3 py-1.5 rounded text-xs font-semibold cursor-pointer ${uploading ? 'opacity-50 pointer-events-none' : ''}`}>
               <span>{uploading ? 'Uploading…' : 'Upload Excel'}</span>
               <input
                 type="file"
@@ -149,155 +173,129 @@ export default function ExitSurveySheet({
                 }}
               />
             </label>
-            <button
-              type="button"
-              onClick={onSave}
-              disabled={saving || !students.length}
-              className="bg-slate-900 hover:bg-slate-800 text-white px-4 py-1.5 rounded text-xs font-semibold disabled:opacity-50"
-            >
+            <button type="button" onClick={onSave} disabled={saving || !students.length}
+              className="bg-slate-900 text-white px-4 py-1.5 rounded text-xs font-semibold disabled:opacity-50">
               {saving ? 'Saving…' : 'Save Exit Survey'}
             </button>
-            <button
-              type="button"
-              onClick={() => window.print()}
-              className="bg-slate-200 hover:bg-slate-300 text-slate-800 px-3 py-1.5 rounded text-xs font-semibold"
-            >
+            <button type="button" onClick={() => window.print()} className="bg-slate-200 px-3 py-1.5 rounded text-xs font-semibold">
               Print
             </button>
           </div>
         </div>
-
-        {/* Rating Rubric Guide */}
-        <div className="bg-slate-50 border border-slate-200 rounded p-3 text-xs text-slate-700 grid grid-cols-2 sm:grid-cols-5 gap-2">
-          <div className="flex items-center gap-1.5"><span className="font-bold text-slate-900">5:</span><span>To a great extent</span></div>
-          <div className="flex items-center gap-1.5"><span className="font-bold text-slate-900">4:</span><span>To a moderate extent</span></div>
-          <div className="flex items-center gap-1.5"><span className="font-bold text-slate-900">3:</span><span>To some extent</span></div>
-          <div className="flex items-center gap-1.5"><span className="font-bold text-slate-900">2:</span><span>To less extent</span></div>
-          <div className="flex items-center gap-1.5"><span className="font-bold text-slate-900">1:</span><span>Not at all</span></div>
+        <div className="bg-slate-50 border rounded p-2 text-[11px] text-slate-700 grid grid-cols-2 sm:grid-cols-5 gap-1">
+          <span><b>5</b> To a great extent</span>
+          <span><b>4</b> To a moderate extent</span>
+          <span><b>3</b> To some extent</span>
+          <span><b>2</b> To less extent</span>
+          <span><b>1</b> Not at all</span>
         </div>
       </div>
 
-      {/* Printable Sheet View Matching the User Images */}
-      <div className="bg-white shadow rounded-lg p-6 overflow-x-auto print:shadow-none print:p-0">
-        {/* Document Header (Matches Image 1) */}
-        <div className="border border-slate-400 bg-white p-4 mb-4">
-          <h2 className="text-center font-bold text-base uppercase tracking-wider text-slate-900 mb-3">
-            {course?.institute || 'JAYPEE INSTITUTE OF INFORMATION TECHNOLOGY'}
-          </h2>
-          <div className="flex flex-wrap justify-between items-start text-xs font-semibold text-slate-800 leading-relaxed">
-            <div className="space-y-1">
-              <p>Academic Year : {ay} ({sem} Semester)</p>
-              <p>Semester/Branch: {semBranch}</p>
-              <p>Course Name and Code: {course?.course_name || ''} ({course?.course_code || ''})</p>
-              <p>NBA Code: {course?.nba_code || '—'}</p>
-              <p>Course Coordinator: {coordinator === '—' ? '' : coordinator}</p>
-            </div>
-            <div className="text-right">
-              <span className="text-base font-bold text-slate-900 border-b-2 border-slate-900 pb-0.5 inline-block">
-                Exit survey Form
-              </span>
-            </div>
-          </div>
-        </div>
-
-        {/* Empty state warning if no students */}
+      <section className="bg-white shadow rounded-lg p-5 no-print">
+        <h3 className="font-semibold mb-2">Edit ratings</h3>
         {students.length === 0 ? (
-          <div className="p-8 text-center bg-slate-50 border border-dashed rounded text-sm text-slate-500">
-            No students found on the roster. Add students on the Roster tab first or upload an Excel file.
-          </div>
+          <p className="text-sm text-slate-500">Add students on the Roster tab first.</p>
         ) : questions.length === 0 ? (
-          <div className="p-8 text-center bg-amber-50 border border-amber-200 rounded text-sm text-amber-800">
-            No Course Outcomes found for this course. Please define Course Outcomes on the Course Description tab.
-          </div>
+          <p className="text-sm text-amber-700">Add course outcomes on Course Description first.</p>
         ) : (
-          <table className="w-full border-collapse border border-slate-800 text-xs">
-            <thead>
-              <tr className="bg-slate-100 text-slate-900 font-semibold">
-                <th className="border border-slate-800 p-2 text-left min-w-[200px]">Email Address</th>
-                <th className="border border-slate-800 p-2 text-center w-16">Class</th>
-                <th className="border border-slate-800 p-2 text-left min-w-[160px]">Name</th>
-                <th className="border border-slate-800 p-2 text-center min-w-[120px]">Enrollment Number</th>
-                {questions.map((q, idx) => {
-                  const co = (outcomes || []).find((o) => Number(o.id) === Number(q.course_outcome)) || outcomes?.[idx];
-                  return (
-                    <th key={q.id || q.key} className="border border-slate-800 p-2 text-left font-normal min-w-[260px] max-w-[320px] bg-slate-50">
-                      <div className="text-[11px] leading-tight text-slate-800">
-                        {formatExitSurveyRubric(co, course, idx)}
-                      </div>
-                    </th>
-                  );
-                })}
-              </tr>
-            </thead>
-            <tbody>
-              {students.map((s, sIdx) => {
-                const email = `${s.roll_number}@mail.jiit.ac.in`;
-                return (
-                  <tr key={s.id || s.roll_number} className={sIdx % 2 === 0 ? 'bg-white' : 'bg-slate-50/50'}>
-                    <td className="border border-slate-800 px-2 py-1.5 text-slate-700">
-                      {email}
-                    </td>
-                    <td className="border border-slate-800 p-1 text-center">
-                      <input
-                        type="text"
-                        value={s.batch || ''}
-                        onChange={(e) => onStudentBatchChange && onStudentBatchChange(s.id, e.target.value)}
-                        placeholder="—"
-                        className="w-12 text-center font-medium bg-transparent focus:bg-white focus:outline-blue-500 rounded"
-                        title="Class / Batch (e.g. C1, C2)"
-                      />
-                    </td>
-                    <td className="border border-slate-800 px-2 py-1.5 font-semibold text-slate-900">
-                      {s.name}
-                    </td>
-                    <td className="border border-slate-800 px-2 py-1.5 text-center font-mono font-medium text-slate-900">
-                      {s.roll_number}
-                    </td>
-                    {questions.map((q) => {
-                      const val = marksGrid[`${s.id}-${q.id}`] ?? '';
-                      return (
-                        <td key={q.id || q.key} className="border border-slate-800 p-1 text-center">
+          <>
+            <div className="exit-co-legend mb-3">
+              {coMeta.map((item) => (
+                <p key={item.q.id || item.idx}><b>{item.short}</b> — {item.co?.description || item.rubric}</p>
+              ))}
+            </div>
+            <div className="exit-edit-wrap">
+              <table className="exit-edit-table">
+                <thead>
+                  <tr>
+                    <th className="w-sno">Sno</th>
+                    <th className="w-mail">Email Address</th>
+                    <th className="w-class">Class</th>
+                    <th className="w-name">Name</th>
+                    <th className="w-enrol">Enrollment Number</th>
+                    {coMeta.map((item) => (
+                      <th key={item.q.id || item.idx}>{item.short}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {students.map((s, i) => (
+                    <tr key={s.id}>
+                      <td>{i + 1}</td>
+                      <td className="left wrap">{s.roll_number}@mail.jiit.ac.in</td>
+                      <td>
+                        <input
+                          value={s.batch || ''}
+                          onChange={(e) => onStudentBatchChange && onStudentBatchChange(s.id, e.target.value)}
+                          className="exit-in"
+                        />
+                      </td>
+                      <td className="left wrap">{s.name}</td>
+                      <td>{s.roll_number}</td>
+                      {questions.map((q) => (
+                        <td key={q.id || q.key}>
                           <input
                             type="number"
                             min="1"
                             max="5"
                             step="1"
-                            value={val}
+                            value={marksGrid[`${s.id}-${q.id}`] ?? ''}
                             onChange={(e) => onMarkChange(s.id, q.id, e.target.value)}
-                            className="w-12 text-center py-1 font-bold text-slate-900 bg-transparent focus:bg-white focus:ring-1 focus:ring-blue-500 border border-transparent hover:border-slate-300 focus:border-blue-500 rounded"
-                            placeholder="—"
+                            className="exit-in"
                           />
                         </td>
-                      );
-                    })}
+                      ))}
+                    </tr>
+                  ))}
+                  <tr className="exit-sum">
+                    <td colSpan={5} className="right">Average</td>
+                    {stats.map((st, i) => <td key={`a-${i}`}>{st.avg}</td>)}
                   </tr>
-                );
-              })}
-              {/* Summary Stats Row */}
-              <tr className="bg-slate-200 font-bold border-t-2 border-slate-800 text-slate-900">
-                <td colSpan={4} className="border border-slate-800 p-2 text-right">
-                  Average Rating / Score:
-                </td>
-                {stats.map((st, i) => (
-                  <td key={`avg-${i}`} className="border border-slate-800 p-2 text-center text-slate-900 font-bold">
-                    {st.avg}
-                  </td>
-                ))}
-              </tr>
-              <tr className="bg-slate-100 font-semibold text-slate-800">
-                <td colSpan={4} className="border border-slate-800 p-2 text-right">
-                  % Students ≥ 3 (To some extent or above):
-                </td>
-                {stats.map((st, i) => (
-                  <td key={`pct-${i}`} className="border border-slate-800 p-2 text-center text-slate-900 font-bold">
-                    {st.pct !== '—' ? `${st.pct}%` : '—'}
-                  </td>
-                ))}
-              </tr>
-            </tbody>
-          </table>
+                  <tr className="exit-sum">
+                    <td colSpan={5} className="right">% ≥ 3</td>
+                    {stats.map((st, i) => <td key={`p-${i}`}>{st.pct === '—' ? '—' : `${st.pct}%`}</td>)}
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </>
         )}
-      </div>
+      </section>
+
+      <section className="bg-white shadow rounded-lg p-5 print:shadow-none print:p-0">
+        <h3 className="font-semibold mb-2 no-print">Preview</h3>
+        <div className="exit-preview">
+          <HeaderBlock course={course} ay={ay} sem={sem} semBranch={semBranch} coordinator={coordinator} />
+          {students.length > 0 && questions.length > 0 && (
+            <table className="exit-preview-table">
+              <thead>
+                <tr>
+                  <th>Email Address</th>
+                  <th>Class</th>
+                  <th>Name</th>
+                  <th>Enrollment Number</th>
+                  {coMeta.map((item) => (
+                    <th key={`p-${item.q.id || item.idx}`}>{item.rubric}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {students.map((s) => (
+                  <tr key={`pv-${s.id}`}>
+                    <td className="left wrap">{s.roll_number}@mail.jiit.ac.in</td>
+                    <td>{s.batch || ''}</td>
+                    <td className="left wrap">{s.name}</td>
+                    <td>{s.roll_number}</td>
+                    {questions.map((q) => (
+                      <td key={q.id || q.key}>{marksGrid[`${s.id}-${q.id}`] ?? ''}</td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      </section>
     </div>
   );
 }

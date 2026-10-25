@@ -4,7 +4,9 @@ from rest_framework.views import APIView
 
 from courses.models import Course
 from courses.serializers import CourseSerializer
-from .models import AssessmentToolsDocument, default_co_rows, default_course_heading, default_title, tools_are_co_rows
+from .models import (
+    AssessmentToolsDocument, default_question_tools, default_title, tools_are_question_map,
+)
 from .serializers import AssessmentToolsDocumentSerializer
 
 
@@ -23,16 +25,16 @@ class AssessmentToolsDetailView(APIView):
         if not course:
             return Response({'error': 'Course not found.'}, status=404)
         doc, created = AssessmentToolsDocument.objects.get_or_create(course=course)
-        rows = default_co_rows(course, doc.tools if tools_are_co_rows(doc.tools) else None)
         dirty = created
-        if rows != (doc.tools or []):
-            doc.tools = rows
+        if not tools_are_question_map(doc.tools):
+            doc.tools = default_question_tools(course)
             dirty = True
-        if not doc.doc_title or doc.doc_title in ('Assessment Tools',):
-            doc.doc_title = default_title(course)
+        if not doc.doc_title or doc.doc_title.startswith('Assessment Tools for CO Attainment'):
+            doc.doc_title = default_title()
             dirty = True
-        if not doc.sub_heading or doc.sub_heading.startswith('Cognitive level'):
-            doc.sub_heading = default_course_heading(course)
+        if not doc.semester_label:
+            sem = 'EVEN' if course.semester == 'EVEN' else 'ODD'
+            doc.semester_label = f'{sem} Semester'
             dirty = True
         if dirty:
             doc.save()
@@ -46,7 +48,7 @@ class AssessmentToolsDetailView(APIView):
         if not course:
             return Response({'error': 'Course not found.'}, status=404)
         doc, created = AssessmentToolsDocument.objects.get_or_create(course=course)
-        if created:
+        if created or not tools_are_question_map(doc.tools):
             doc.apply_defaults()
             doc.save()
         serializer = AssessmentToolsDocumentSerializer(doc, data=request.data, partial=True)

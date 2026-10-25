@@ -2,77 +2,58 @@ from django.db import models
 from courses.models import Course
 
 
-LAB_DIRECT_DEFAULTS = [
-    'Eval 1(D2D)',
-    'Mid Viva, Project(D2D)',
-    'Mid Viva, End Viva',
-    'Eval 1(D2D), Eval 2(D2D)',
-    'Project(D2D)',
-]
-
-
-def tools_are_co_rows(tools):
+def tools_are_question_map(tools):
     if not tools or not isinstance(tools, list):
         return False
     first = tools[0]
-    return isinstance(first, dict) and 'questions' not in first and (
-        'direct' in first or 'indirect' in first
-    )
+    return isinstance(first, dict) and isinstance(first.get('questions'), list)
 
 
-def default_direct_for(course, index):
+def _co_at(outcomes, index):
+    if not outcomes:
+        return None
+    if 0 <= index < len(outcomes):
+        return outcomes[index]
+    return outcomes[-1]
+
+
+def default_question_tools(course):
+    outcomes = list(course.outcomes.all().order_by('order', 'id'))
     is_lab = bool(getattr(course, 'is_lab', False) or getattr(course, 'course_kind', '') == 'LAB')
     if is_lab:
-        if index < len(LAB_DIRECT_DEFAULTS):
-            return LAB_DIRECT_DEFAULTS[index]
-        return 'Eval 1(D2D)'
-    return 'T1, T2, T3'
+        specs = [('Mid Sem', None, 2), ('End Sem', None, 2), ('D2D', None, 5)]
+    else:
+        specs = [
+            ('T-1', None, 4),
+            ('T-2', None, 4),
+            ('T-3', [0, 1, 2, 2, 1, 3], 6),
+        ]
+    tools = []
+    for name, indexes, count in specs:
+        questions = []
+        for i in range(count):
+            idx = indexes[i] if indexes and i < len(indexes) else i
+            co = _co_at(outcomes, idx)
+            questions.append({
+                'qno': f'Q{i + 1}',
+                'co_code': co.co_code if co else '',
+                'ques_level': co.cognitive_level if co else '',
+                'remarks': '',
+            })
+        tools.append({'name': name, 'questions': questions})
+    return tools
 
 
-def default_co_rows(course, existing=None):
-    saved = {}
-    if tools_are_co_rows(existing):
-        for row in existing:
-            saved[row.get('co_code')] = row
-    rows = []
-    outcomes = list(course.outcomes.all().order_by('order', 'id'))
-    for i, co in enumerate(outcomes):
-        prev = saved.get(co.co_code) or {}
-        if 'direct' in prev:
-            direct = prev.get('direct') or ''
-        else:
-            direct = default_direct_for(course, i)
-        if 'indirect' in prev:
-            indirect = prev.get('indirect') or ''
-        else:
-            indirect = 'Course Exit Survey'
-        rows.append({
-            'co_code': co.co_code,
-            'direct': direct,
-            'indirect': indirect,
-        })
-    return rows
-
-
-def default_title(course):
-    name = (course.course_name or course.course_code or 'Course').strip()
-    return f'Assessment Tools for CO Attainment –{name}'
-
-
-def default_course_heading(course):
-    name = (course.course_name or '').strip()
-    code = (course.course_code or '').strip()
-    if name and code:
-        return f'{name} [{code}]'
-    return name or code
+def default_title():
+    return 'Cognitive level mapping of CO to the assessment tool'
 
 
 class AssessmentToolsDocument(models.Model):
-    """CO-wise Direct / Indirect assessment tools for one offering."""
+    """Cognitive-level mapping of COs to T1/T2/T3 (or lab) assessment questions."""
     course = models.OneToOneField(
         Course, on_delete=models.CASCADE, related_name='assessment_tools',
     )
-    doc_title = models.CharField(max_length=255, default='Assessment Tools for CO Attainment')
+    doc_title = models.CharField(max_length=255, default='Cognitive level mapping of CO to the assessment tool')
     sub_heading = models.CharField(max_length=255, blank=True)
     semester_label = models.CharField(max_length=80, blank=True)
     module_coordinator = models.CharField(max_length=255, blank=True)
@@ -81,12 +62,13 @@ class AssessmentToolsDocument(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
     def __str__(self):
-        return f'Attainment Sheet — {self.course}'
+        return f'Assessment Tool — {self.course}'
 
     def apply_defaults(self):
-        if not self.doc_title or self.doc_title in ('Assessment Tools',):
-            self.doc_title = default_title(self.course)
-        if not self.sub_heading or self.sub_heading.startswith('Cognitive level'):
-            self.sub_heading = default_course_heading(self.course)
-        if not tools_are_co_rows(self.tools):
-            self.tools = default_co_rows(self.course, None)
+        if not self.doc_title or self.doc_title.startswith('Assessment Tools for CO Attainment'):
+            self.doc_title = default_title()
+        if not tools_are_question_map(self.tools):
+            self.tools = default_question_tools(self.course)
+        if not self.semester_label:
+            sem = 'EVEN' if getattr(self.course, 'semester', '') == 'EVEN' else 'ODD'
+            self.semester_label = f'{sem} Semester'

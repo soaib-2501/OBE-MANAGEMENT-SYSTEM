@@ -5,7 +5,8 @@ import CourseSubnav from '../components/CourseSubnav';
 import SheetPreview from '../components/SheetPreview';
 import LabSheetPreview from '../components/LabSheetPreview';
 import ExitSurveySheet from '../components/ExitSurveySheet';
-import { parseExamMetaFromRows, parseMarksFromRows, parseRosterFromRows, readSpreadsheetRows } from '../utils/excelImport';
+import LabAttainmentSheet from '../components/LabAttainmentSheet';
+import { parseExamMetaFromRows, parseExitSurveyFromRows, parseMarksFromRows, parseRosterFromRows, readSpreadsheetRows } from '../utils/excelImport';
 import { coursesListLabel, coursesListPath, isLabCourse } from '../utils/offering';
 
 const THEORY_BLOCKS = [
@@ -23,9 +24,7 @@ const LAB_BLOCKS = [
   { key: 'FEEDBACK', label: 'Exit Survey' },
 ];
 
-const LAB_PLACEHOLDER_TABS = [
-  { id: 'co_attainment', label: 'CO Attainment' },
-];
+const LAB_ATTAINMENT_TAB = { id: 'co_attainment', label: 'CO Attainment' };
 
 const D2D_GROUPS = ['Eval1', 'Eval2', 'PBL'];
 
@@ -284,7 +283,7 @@ export default function CourseAssessments() {
 
   useEffect(() => {
     const examTab = THEORY_BLOCKS.some((b) => b.key === tab) || LAB_BLOCKS.some((b) => b.key === tab);
-    if (tab === 'attainment' || tab === 'result' || examTab) loadSheet();
+    if (tab === 'attainment' || tab === 'result' || tab === 'co_attainment' || examTab) loadSheet();
   }, [tab, id]);
 
   function patchBlock(fields) {
@@ -460,7 +459,9 @@ export default function CourseAssessments() {
     setUploading(true);
     try {
       const rows = await readSpreadsheetRows(file, { tab: isExitSurvey ? 'FEEDBACK' : tab });
-      const parsed = parseMarksFromRows(rows, block.questions || []);
+      const parsed = isExitSurvey
+        ? parseExitSurveyFromRows(rows, block.questions || [])
+        : parseMarksFromRows(rows, block.questions || []);
       const meta = parseExamMetaFromRows(rows);
       if (!parsed.students.length && !Object.keys(parsed.marksByEnrol).length) {
         setError('Could not read marks. Use columns Rollno / Enrol No / Email Address, Name, Class/Batch, then the mark columns for this tab.');
@@ -471,18 +472,26 @@ export default function CourseAssessments() {
         .filter((s) => s.roll_number)
         .map((s) => ({ roll_number: s.roll_number, name: s.name || '', batch: s.batch || '' }));
       if (payload.length) {
-        const res = await api.post('/assessments/students/bulk/', {
-          course: Number(id),
-          mode: 'append',
-          students: payload,
-        });
-        roster = res.data.students || students;
-        setStudents(roster);
+        try {
+          const res = await api.post('/assessments/students/bulk/', {
+            course: Number(id),
+            mode: isExitSurvey || isLabCourse(course) ? 'match_only' : 'append',
+            students: payload,
+          });
+          roster = res.data.students || students;
+          setStudents(roster);
+        } catch {
+          roster = students;
+        }
       }
       const next = { ...marksGrid };
       let filled = 0;
+      const norm = (v) => String(v || '').toLowerCase().replace(/[^a-z0-9]/g, '');
       roster.forEach((s) => {
-        const marks = parsed.marksByEnrol[(s.roll_number || '').toLowerCase()];
+        const roll = s.roll_number || '';
+        const marks = parsed.marksByEnrol[roll.toLowerCase()]
+          || parsed.marksByEnrol[norm(roll)]
+          || parsed.marksByEnrol[norm(roll.replace(/^0+/, ''))];
         if (!marks) return;
         (block.questions || []).forEach((q) => {
           if (!q.id || marks[q.id] == null || marks[q.id] === '') return;
@@ -522,7 +531,7 @@ export default function CourseAssessments() {
       return [
         { id: 'roster', label: 'Roster' },
         ...LAB_BLOCKS,
-        ...LAB_PLACEHOLDER_TABS,
+        LAB_ATTAINMENT_TAB,
       ];
     }
     return [
@@ -546,7 +555,7 @@ export default function CourseAssessments() {
   const listLabel = coursesListLabel(course);
 
   return (
-    <div className="p-8 max-w-6xl mx-auto print:p-0 print:max-w-none">
+    <div className={`p-8 mx-auto print:p-0 print:max-w-none ${isExitSurvey || tab === 'co_attainment' ? 'max-w-[1500px]' : 'max-w-6xl'}`}>
       <Link to={listPath} className="text-sm text-slate-500 hover:text-slate-700 no-print">← Back to {listLabel}</Link>
       <h1 className="text-2xl font-bold text-slate-900 mt-2 mb-1 no-print">{course.course_code} — {course.course_name}</h1>
       <p className="text-sm text-slate-500 mb-4 no-print">
@@ -572,15 +581,6 @@ export default function CourseAssessments() {
           </button>
         ))}
       </div>
-
-      {lab && LAB_PLACEHOLDER_TABS.some((t) => t.id === tab) && (
-        <section className="bg-white shadow rounded-lg p-6">
-          <h2 className="font-semibold mb-1">{LAB_PLACEHOLDER_TABS.find((t) => t.id === tab)?.label}</h2>
-          <p className="text-sm text-slate-500">
-            This lab assessment tab is ready. Detailed fields and mark entry will be added in a follow-up.
-          </p>
-        </section>
-      )}
 
       {tab === 'roster' && (
         <section className="bg-white shadow rounded-lg p-6">
@@ -919,11 +919,17 @@ export default function CourseAssessments() {
         />
       )}
 
-      {lab && LAB_PLACEHOLDER_TABS.some((t) => t.id === tab) && (
-        <section className="bg-white shadow rounded-lg p-6">
-          <h2 className="font-semibold mb-1">{LAB_PLACEHOLDER_TABS.find((t) => t.id === tab)?.label}</h2>
-          <p className="text-sm text-slate-500">This tab will be completed next. Mid Sem and End Sem marks are on those tabs.</p>
-        </section>
+      {lab && tab === 'co_attainment' && (
+        <LabAttainmentSheet
+          course={course}
+          sheet={sheet}
+          loading={sheetLoading}
+          onRecalculate={async () => {
+            api.post('/attainments/calculate/', { course: Number(id) }).catch(() => {});
+            await loadSheet();
+            setStatus('Lab CO attainment recalculated from Mid / End / D2D / Exit Survey.');
+          }}
+        />
       )}
 
       {!lab && !lab && tab === 'attainment' && (
