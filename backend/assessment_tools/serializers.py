@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import AssessmentToolsDocument, tools_are_co_rows
+from .models import AssessmentToolsDocument, tools_are_question_map
 
 
 class AssessmentToolsDocumentSerializer(serializers.ModelSerializer):
@@ -16,15 +16,27 @@ class AssessmentToolsDocumentSerializer(serializers.ModelSerializer):
             return []
         if not isinstance(value, list):
             raise serializers.ValidationError('Tools must be a list.')
-        if not tools_are_co_rows(value) and value:
-            raise serializers.ValidationError('Each row needs direct and indirect assessment tools.')
         cleaned = []
-        for row in value:
-            if not isinstance(row, dict):
-                raise serializers.ValidationError('Each row must be an object.')
+        for tool in value:
+            if not isinstance(tool, dict):
+                raise serializers.ValidationError('Each assessment tool must be an object.')
+            questions = tool.get('questions') or []
+            if not isinstance(questions, list):
+                raise serializers.ValidationError('Each tool needs a questions list.')
+            qs = []
+            for row in questions:
+                if not isinstance(row, dict):
+                    raise serializers.ValidationError('Each question must be an object.')
+                qs.append({
+                    'qno': str(row.get('qno') or '').strip(),
+                    'co_code': str(row.get('co_code') or '').strip(),
+                    'ques_level': str(row.get('ques_level') or '').strip(),
+                    'remarks': str(row.get('remarks') or '').strip(),
+                })
             cleaned.append({
-                'co_code': str(row.get('co_code') or '').strip(),
-                'direct': str(row.get('direct') or '').strip(),
-                'indirect': str(row.get('indirect') or '').strip(),
+                'name': str(tool.get('name') or '').strip(),
+                'questions': qs,
             })
+        if cleaned and not tools_are_question_map(cleaned):
+            raise serializers.ValidationError('Each assessment tool needs a questions list.')
         return cleaned

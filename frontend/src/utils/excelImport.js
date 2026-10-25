@@ -59,12 +59,20 @@ function isSkipMarkHeader(key, raw) {
 
 function extractCoNum(value) {
   const s = cellStr(value);
-  // Match rubric format like [C175.1 or [18B15CI121.1 or [.1
-  const mDot = s.match(/\[[A-Za-z0-9_/-]*\.(\d+)/);
+  const mDot = s.match(/\[[A-Za-z0-9_/-]*\.(\d+)/) || s.match(/\b[A-Za-z][A-Za-z0-9/-]*\.(\d+)\b/);
   if (mDot) return Number(mDot[1]);
-  // Match [CO1 or CO1
   const m = s.match(/\[?\s*co\s*(\d+)/i);
   return m ? Number(m[1]) : null;
+}
+
+function enrolKey(value) {
+  return cellEnrol(value).toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
+function rollFromEmail(value) {
+  const email = cellStr(value);
+  const m = email.match(/^([a-zA-Z0-9]+)@/);
+  return m ? m[1] : '';
 }
 
 function extractMaxMarks(value) {
@@ -345,4 +353,84 @@ export function parseMarksFromRows(aoa, questions) {
     marksByEnrol,
     unmatchedColumns: leftoverCols.map((c) => cellStr(header.headers[c])),
   };
+}
+
+export function parseExitSurveyFromRows(aoa, questions) {
+  const rows = nonEmptyRows(aoa);
+  const qs = questions || [];
+  if (!rows.length) return { students: [], marksByEnrol: {}, unmatchedColumns: [] };
+
+  const header = detectMarksHeader(rows);
+  if (!header) return { students: [], marksByEnrol: {}, unmatchedColumns: [] };
+
+  const skipIdentity = (col) => (
+    col === header.enrolIdx || col === header.nameIdx || col === header.batchIdx || col === header.emailIdx
+  );
+  const ratingCols = [];
+  (header.headers || []).forEach((raw, col) => {
+    if (skipIdentity(col)) return;
+    const key = headerKey(raw);
+    if (!key && cellStr(raw) === '') return;
+    if (key === 'timestamp' || isSnoHeader(key)) return;
+    ratingCols.push(col);
+  });
+
+  const usedQuestion = new Set();
+  const colToQuestion = new Map();
+  ratingCols.forEach((col) => {
+    const raw = header.headers[col];
+    const n = extractCoNum(raw);
+    if (n == null) return;
+    const qi = qs.findIndex((q, i) => {
+      if (usedQuestion.has(i)) return false;
+      const qn = extractCoNum(`${q.label || ''} ${q.key || ''}`);
+      return qn === n || i + 1 === n;
+    });
+    if (qi >= 0) {
+      usedQuestion.add(qi);
+      colToQuestion.set(col, qs[qi]);
+    }
+  });
+  ratingCols.forEach((col) => {
+    if (colToQuestion.has(col)) return;
+    const qi = qs.findIndex((_, i) => !usedQuestion.has(i));
+    if (qi < 0) return;
+    usedQuestion.add(qi);
+    colToQuestion.set(col, qs[qi]);
+  });
+
+  const marksByEnrol = {};
+  const students = [];
+  const seen = new Set();
+
+  const storeMarks = (roll, name, batch, marks) => {
+    const key = enrolKey(roll);
+    if (!key || seen.has(key)) return;
+    seen.add(key);
+    students.push({ roll_number: String(roll).trim(), name, batch });
+    marksByEnrol[roll.toLowerCase()] = marks;
+    marksByEnrol[key] = marks;
+  };
+
+  for (let i = header.headerIndex + 1; i < rows.length; i += 1) {
+    const row = rows[i] || [];
+    let roll_number = header.enrolIdx >= 0 ? cellEnrol(row[header.enrolIdx]) : '';
+    if (!roll_number && header.emailIdx >= 0) roll_number = rollFromEmail(row[header.emailIdx]);
+    const name = header.nameIdx >= 0 ? cellStr(row[header.nameIdx]) : '';
+    const batch = header.batchIdx >= 0 ? cellStr(row[header.batchIdx]) : '';
+    if (!roll_number) continue;
+    if (/^average/i.test(name) || /^average/i.test(roll_number)) continue;
+    const marks = {};
+    colToQuestion.forEach((q, col) => {
+      const raw = row[col];
+      if (raw == null || raw === '' || isAbsentMark(raw)) return;
+      const num = Number(raw);
+      if (Number.isNaN(num)) return;
+      if (!q?.id) return;
+      marks[q.id] = String(raw).trim();
+    });
+    storeMarks(roll_number, name, batch, marks);
+  }
+
+  return { students, marksByEnrol, unmatchedColumns: [] };
 }

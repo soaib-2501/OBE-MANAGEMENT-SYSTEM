@@ -14,7 +14,7 @@ from math import ceil
 from decimal import Decimal, ROUND_HALF_UP
 from collections import defaultdict
 from courses.models import Course, CourseOutcome, CoPoMapping
-from assessments.models import Assessment, Student, StudentMark, GradeBand, SHEET_TYPES
+from assessments.models import Assessment, Student, StudentMark, GradeBand, LAB_SHEET_TYPES, SHEET_TYPES
 from .models import Attainment, ProgramAttainment
 
 
@@ -140,7 +140,96 @@ def compute_co_stats(assessment, course_outcome, marks_idx=None, roster_n=0, que
     }
 
 
+def _is_lab_course(course):
+    return bool(getattr(course, 'is_lab', False) or getattr(course, 'course_kind', '') == 'LAB')
+
+
+def _mean_levels(values):
+    nums = [v for v in values if v is not None]
+    if not nums:
+        return None
+    return sum(nums) / len(nums)
+
+
+def _level_of(stats):
+    return None if not stats else stats.get('level')
+
+
+def _d2d_groups(questions):
+    groups = {'Eval1': [], 'Eval2': [], 'Project': []}
+    for q in questions or []:
+        g = (q.group or '').strip().lower()
+        key = (q.key or '').strip().upper()
+        label = (q.label or '').strip().lower()
+        if g == 'eval1' or key.startswith('EVAL1') or label.startswith('eval1'):
+            groups['Eval1'].append(q)
+        elif g == 'eval2' or key.startswith('EVAL2') or label.startswith('eval2'):
+            groups['Eval2'].append(q)
+        elif g in ('pbl', 'project') or key.startswith('PBL') or 'project' in label:
+            groups['Project'].append(q)
+    return groups
+
+
+def _component_max(questions):
+    total = sum(float(q.max_marks or 0) for q in (questions or []))
+    return int(round(total)) if total else 0
+
+
+def compute_lab_attainment_row(course_id, course_outcome, marks_idx=None, roster_n=0, blocks=None, questions_by_a=None):
+    if blocks is None:
+        blocks = {typ: _block_for_type(course_id, typ) for typ in LAB_SHEET_TYPES}
+    if marks_idx is None:
+        marks_idx = _marks_index(course_id)
+
+    def stats_for(typ, questions=None):
+        block = blocks.get(typ)
+        if not block:
+            return None
+        qs = questions
+        if qs is None:
+            qs = (questions_by_a or {}).get(block.id)
+        return compute_co_stats(block, course_outcome, marks_idx, roster_n, qs)
+
+    d2d = blocks.get('D2D')
+    d2d_qs = (questions_by_a or {}).get(d2d.id, list(d2d.questions.all())) if d2d else []
+    groups = _d2d_groups(d2d_qs)
+
+    mid = stats_for('MID')
+    end = stats_for('END')
+    eval1 = stats_for('D2D', groups['Eval1']) if groups['Eval1'] else None
+    eval2 = stats_for('D2D', groups['Eval2']) if groups['Eval2'] else None
+    project = stats_for('D2D', groups['Project']) if groups['Project'] else None
+    fb = stats_for('FEEDBACK')
+
+    mid_l, end_l = _level_of(mid), _level_of(end)
+    e1_l, e2_l, p_l = _level_of(eval1), _level_of(eval2), _level_of(project)
+    direct = _mean_levels([mid_l, end_l, e1_l, e2_l, p_l])
+    cie = _mean_levels([mid_l, e1_l, e2_l, p_l])
+    see = end_l
+    indirect = _level_of(fb)
+    final = None
+    if direct is not None:
+        final = 0.8 * direct + 0.2 * (indirect if indirect is not None else 0)
+    elif indirect is not None:
+        final = 0.2 * indirect
+
+    return {
+        'mid': mid, 'end': end, 'eval1': eval1, 'eval2': eval2, 'project': project, 'fb': fb,
+        'mid_level': mid_l, 'end_level': end_l,
+        'eval1_level': e1_l, 'eval2_level': e2_l, 'project_level': p_l,
+        'direct': direct, 'indirect': indirect, 'final': final, 'cie': cie, 'see': see,
+        't1': mid, 't2': end, 't3': None, 'ta': project,
+        't_avg': direct, 'assgn_level': p_l, 'sie': see,
+    }
+
+
 def compute_attainment_row(course_id, course_outcome, marks_idx=None, roster_n=0, blocks=None, questions_by_a=None):
+    course = Course.objects.filter(pk=course_id).only('id', 'is_lab', 'course_kind').first()
+    if course and _is_lab_course(course):
+        return compute_lab_attainment_row(
+            course_id, course_outcome, marks_idx=marks_idx, roster_n=roster_n,
+            blocks=blocks, questions_by_a=questions_by_a,
+        )
     if blocks is None:
         blocks = {
             typ: _block_for_type(course_id, typ)
@@ -280,8 +369,10 @@ def student_block_total_from_index(assessment, student_id, marks_idx, questions)
 
 def build_sheet(course):
     """Full attainment + result payload for the Attainment Sheet (one marks query)."""
+    lab = _is_lab_course(course)
+    type_set = LAB_SHEET_TYPES if lab else SHEET_TYPES
     assessments = list(
-        Assessment.objects.filter(course=course, assessment_type__in=SHEET_TYPES)
+        Assessment.objects.filter(course=course, assessment_type__in=type_set)
         .prefetch_related('questions')
         .order_by('id')
     )
@@ -307,7 +398,7 @@ def build_sheet(course):
             blocks=blocks, questions_by_a=questions_by_a,
         )
         mappings = mappings_by_co.get(co.id, {})
-        co_rows.append({
+        payload = {
             'id': co.id,
             'co_code': co.co_code,
             't1_level': row['t1']['level'] if row['t1'] else None,
@@ -326,7 +417,17 @@ def build_sheet(course):
             'ta': row['ta'],
             'fb': row['fb'],
             'mappings': mappings,
-        })
+        }
+        if lab:
+            payload.update({
+                'mid_level': row.get('mid_level'),
+                'end_level': row.get('end_level'),
+                'eval1_level': row.get('eval1_level'),
+                'eval2_level': row.get('eval2_level'),
+                'project_level': row.get('project_level'),
+                'see': row.get('see') if row.get('see') is None else _f(row.get('see')),
+            })
+        co_rows.append(payload)
 
     po_attainment = {}
     mapping_avg = {}
@@ -347,9 +448,20 @@ def build_sheet(course):
         po_attainment[po] = _f(num / den) if den and any_map else None
         mapping_avg[po] = _f(map_sum / map_n) if map_n else None
 
+    d2d_block = blocks.get('D2D')
+    d2d_qs = questions_by_a.get(d2d_block.id, []) if d2d_block else []
+    d2d_groups = _d2d_groups(d2d_qs) if lab else {}
+    lab_headers = {
+        'mid_max': _component_max(questions_by_a.get(blocks['MID'].id, [])) if blocks.get('MID') else 20,
+        'end_max': _component_max(questions_by_a.get(blocks['END'].id, [])) if blocks.get('END') else 20,
+        'eval1_max': _component_max(d2d_groups.get('Eval1')),
+        'eval2_max': _component_max(d2d_groups.get('Eval2')),
+        'project_max': _component_max(d2d_groups.get('Project')),
+    } if lab else {}
+
     exam_summaries = []
     exam_pages = []
-    for typ in SHEET_TYPES:
+    for typ in type_set:
         a = blocks.get(typ)
         if not a:
             continue
@@ -494,4 +606,6 @@ def build_sheet(course):
         'exam_pages': exam_pages,
         'results': results,
         'grade_distribution': grade_distribution,
+        'kind': 'LAB' if lab else 'THEORY',
+        'lab_headers': lab_headers,
     }
