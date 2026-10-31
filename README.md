@@ -166,14 +166,105 @@ Print uses the browser dialog (A4). Choose **Save as PDF** as the destination.
 
 **Backend** (`backend/.env`, see `.env.example`):
 
-- `SECRET_KEY` — required
+- `SECRET_KEY` — required in production
 - `DEBUG` — `true` locally, `false` in production
-- `DATABASE_URL` — Postgres
-- `CORS_ALLOWED_ORIGINS` — e.g. `http://localhost:5173`
-- `ALLOWED_HOSTS` — optional; defaults to `localhost,127.0.0.1`
+- `DATABASE_URL` — Neon PostgreSQL connection string
+- `ALLOWED_HOSTS` — e.g. `.onrender.com,localhost,127.0.0.1`
+- `CORS_ALLOWED_ORIGINS` — your Vercel URL, e.g. `https://obe-management-system.vercel.app`
+- `PYTHON_VERSION` — `3.11.9`
 
 **Frontend** (`frontend/.env`):
 
+```env
+VITE_API_BASE_URL=https://your-backend.onrender.com/api
 ```
-VITE_API_BASE_URL=http://localhost:8000/api
+
+---
+
+## Production Deployment (Render + Vercel + Neon)
+
+The application is architected for zero-maintenance cloud hosting:
+
 ```
+[Users / Browsers]
+        │
+        ├── (UI Requests) ─────────► [Vercel] Vite React Frontend (Edge CDN)
+        │                                  │
+        │                                  ▼ (API Requests via Axios)
+        └── (API Endpoints) ───────► [Render] Django 5 + Gunicorn + WhiteNoise
+                                           │
+                                           ▼ (PostgreSQL Connection)
+                                     [Neon.tech] Serverless PostgreSQL
+```
+
+### 1. Backend (Render Web Service)
+- **Repo Root Directory**: `backend`
+- **Python Version**: `3.11.9` (via `.python-version` or `PYTHON_VERSION` env var)
+- **Build Command**: `bash build.sh` (executes `pip install`, `collectstatic`, and `migrate`)
+- **Start Command**: `gunicorn obe_backend.wsgi:application`
+- **Environment Variables**:
+  - `DEBUG`: `false`
+  - `SECRET_KEY`: *(strong random string)*
+  - `DATABASE_URL`: `postgresql://neondb_owner:...`
+  - `ALLOWED_HOSTS`: `.onrender.com,localhost,127.0.0.1`
+  - `CORS_ALLOWED_ORIGINS`: `https://your-frontend.vercel.app`
+
+### 2. Frontend (Vercel)
+- **Root Directory**: `frontend`
+- **Framework Preset**: `Vite`
+- **Build Command**: `npm run build`
+- **Output Directory**: `dist`
+- **Environment Variables**:
+  - `VITE_API_BASE_URL`: `https://<your-render-backend>.onrender.com/api`
+
+---
+
+## How Code Changes Get Updated (CI/CD Workflow)
+
+Both **Render** and **Vercel** are connected directly to your GitHub repository (`main` branch). Updates are fully automated:
+
+### 1. The Standard Update Cycle
+Whenever you make changes to your code locally:
+
+```bash
+# 1. Stage modified files
+git add .
+
+# 2. Commit your changes
+git commit -m "Describe what you changed or fixed"
+
+# 3. Push to GitHub
+git push origin main
+```
+
+### 2. What Happens Automatically on `git push`:
+1. **Frontend (Vercel)**:
+   - Vercel detects changes in the `frontend/` folder.
+   - It runs `npm run build`, creates a new deployment, and swaps traffic to the new version seamlessly with **zero downtime**.
+   - Your live URL is updated in ~20–30 seconds.
+
+2. **Backend (Render)**:
+   - Render detects changes in the `backend/` folder.
+   - It pulls the new commit and runs `bash build.sh`:
+     - Installs any new dependencies from `requirements.txt`.
+     - Collects updated static assets (`collectstatic`).
+     - Applies any new database migrations (`migrate`).
+   - Restarts Gunicorn workers smoothly without dropping active traffic.
+
+### 3. Special Scenarios:
+- **Adding new Database Models/Fields**:
+  Always create your migration files locally before pushing:
+  ```bash
+  cd backend
+  python manage.py makemigrations
+  git add .
+  git commit -m "Add new database migrations"
+  git push origin main
+  ```
+  *(Render will automatically run `python manage.py migrate` during the build!)*
+
+- **Changing Environment Variables**:
+  - If you change a variable in `.env` (like adding a new secret or changing CORS):
+  - Go to your **Render Dashboard** → **Environment** (or **Vercel Project Settings** → **Environment Variables**).
+  - Update the variable there and save. Both platforms will trigger a fast redeploy with the new settings.
+
