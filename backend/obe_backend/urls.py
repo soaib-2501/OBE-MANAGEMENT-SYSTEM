@@ -1,8 +1,18 @@
 from django.contrib import admin
 from django.urls import path, include
+from django.http import JsonResponse
 from .dashboard import DashboardSummaryView
 
+def api_root(request):
+    return JsonResponse({
+        "status": "online",
+        "message": "OBE Management System API is running successfully.",
+        "admin": "/admin/",
+        "api": "/api/"
+    })
+
 urlpatterns = [
+    path('', api_root, name='api-root'),
     path('admin/', admin.site.urls),
 
     # Auth (login / refresh) + user management
