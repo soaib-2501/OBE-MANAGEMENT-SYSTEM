@@ -5,10 +5,8 @@ from .dashboard import DashboardSummaryView
 
 def api_root(request):
     return JsonResponse({
-        "status": "online",
-        "message": "OBE Management System API is running successfully.",
-        "admin": "/admin/",
-        "api": "/api/"
+        'status': 'ok',
+        'service': 'OBE Management System API',
     })
 
 urlpatterns = [

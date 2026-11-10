@@ -70,26 +70,17 @@ Course counts, pending attainment, and level distribution for the signed-in user
 ## Folder structure
 
 ```
-obe-part2/
-├── backend/
-│   ├── manage.py
-│   ├── requirements.txt
+OBE-MANAGEMENT-SYSTEM/
+├── backend/                  # Django API (Render)
+│   ├── build.sh              # pip + collectstatic + migrate
+│   ├── Procfile              # gunicorn (binds $PORT)
 │   ├── .env.example
-│   ├── obe_backend/          # settings, URLs, dashboard
-│   ├── users/                # JWT auth, ADMIN | FACULTY
-│   ├── courses/              # sessions, NBA catalog, faculty directory, Course, COs, mapping
-│   ├── programs/             # Programme PO/PSO catalogues
-│   ├── assessments/          # exams, roster, marks
-│   ├── attainments/          # CO/PO calculation + historical CO (per faculty)
-│   ├── opening_reports/
-│   ├── assessment_tools/
-│   └── closing_reports/
-├── frontend/
-│   └── src/
-│       ├── api/client.js     # axios + JWT refresh queue
-│       ├── context/AuthContext.jsx
-│       ├── pages/            # Login, Courses, Lab Courses, CD, OR, AT, Marks, CR, admin
-│       └── components/
+│   ├── requirements.txt
+│   └── obe_backend/          # settings, URLs, dashboard
+├── frontend/                 # Vite React (Vercel)
+│   ├── vercel.json           # SPA rewrites
+│   └── .env.example
+├── render.yaml               # optional Render Blueprint
 ├── data/                     # optional Excel for seed_catalog
 └── README.md
 ```
@@ -113,41 +104,57 @@ obe-part2/
 
 Protected routes use JWT. Access tokens last **15 minutes**; the frontend refreshes with the refresh token. `POST /auth/logout/` blacklists the refresh token.
 
-## First-time setup
+## Run locally (another computer)
 
-### 1. Database
-PostgreSQL (Neon or local). Point `DATABASE_URL` at a dedicated database.
+Needs **Python 3.11+**, **Node 18+**, **Git**, and a **PostgreSQL** URL (Neon is fine).
 
-### 2. Backend
+```bash
+git clone https://github.com/soaib-2501/OBE-MANAGEMENT-SYSTEM.git
+cd OBE-MANAGEMENT-SYSTEM
+```
+
+### Backend — terminal 1
 
 ```bash
 cd backend
 python -m venv venv
 venv\Scripts\activate              # macOS/Linux: source venv/bin/activate
 pip install -r requirements.txt
-copy .env.example .env             # set SECRET_KEY and DATABASE_URL
+copy .env.example .env             # macOS/Linux: cp .env.example .env
+```
+
+Edit `backend/.env`:
+
+- `SECRET_KEY` — any long random string (required)
+- `DEBUG=true`
+- `DATABASE_URL` — Neon/Postgres with `?sslmode=require`
+- `CORS_ALLOWED_ORIGINS=http://localhost:5173,http://127.0.0.1:5173`
+
+```bash
 python manage.py migrate
 python manage.py runserver         # http://localhost:8000
 ```
 
-`SECRET_KEY` is required (no default). Set `DEBUG=true` only for local development.
+`GET http://localhost:8000/` should return `{"status":"ok",...}`.
 
-Optional catalog seed (needs `data/NBA codes-ODD 2026.xlsx` and `data/data.xlsx`):
+Optional catalog seed (`data/NBA codes-ODD 2026.xlsx` and `data/data.xlsx`):
 
 ```bash
 python manage.py seed_catalog --year 2026 --semester ODD
 ```
 
-### 3. Frontend
+### Frontend — terminal 2
 
 ```bash
 cd frontend
 npm install
-copy .env.example .env             # default: http://localhost:8000/api
+copy .env.example .env             # macOS/Linux: cp .env.example .env
 npm run dev                        # http://localhost:5173
 ```
 
-Open `http://localhost:5173`. If no admin exists, **Create the administrator** on the login page. Add faculty from **Users**.
+`frontend/.env` must be `VITE_API_BASE_URL=http://localhost:8000/api`.
+
+Open **http://localhost:5173**. If no admin exists, use **Create the administrator**. Add faculty from **Users**.
 
 ## Typical course workflow
 
@@ -162,109 +169,102 @@ Open `http://localhost:5173`. If no admin exists, **Create the administrator** o
 
 Print uses the browser dialog (A4). Choose **Save as PDF** as the destination.
 
-## Environment
+## Environment variables
 
-**Backend** (`backend/.env`, see `.env.example`):
+**Backend** (`backend/.env` locally, Render dashboard in production):
 
-- `SECRET_KEY` — required in production
-- `DEBUG` — `true` locally, `false` in production
-- `DATABASE_URL` — Neon PostgreSQL connection string
-- `ALLOWED_HOSTS` — e.g. `.onrender.com,localhost,127.0.0.1`
-- `CORS_ALLOWED_ORIGINS` — your Vercel URL, e.g. `https://obe-management-system.vercel.app`
-- `PYTHON_VERSION` — `3.11.9`
+| Variable | Local | Production |
+|----------|--------|------------|
+| `SECRET_KEY` | long random string | generate on Render |
+| `DEBUG` | `true` | `false` |
+| `DATABASE_URL` | Neon URL + `sslmode=require` | same Neon (or Render Postgres) |
+| `ALLOWED_HOSTS` | `localhost,127.0.0.1` | `.onrender.com` plus your custom domain |
+| `CORS_ALLOWED_ORIGINS` | `http://localhost:5173` | exact Vercel URL, `https://….vercel.app` |
+| `CSRF_TRUSTED_ORIGINS` | same as CORS | Vercel URL + `https://….onrender.com` |
 
-**Frontend** (`frontend/.env`):
+Do not commit `.env`. `USE_SQLITE` is not used; the app always reads `DATABASE_URL`.
 
-```env
-VITE_API_BASE_URL=https://your-backend.onrender.com/api
+**Frontend** (`frontend/.env` locally, Vercel project env in production):
+
 ```
+VITE_API_BASE_URL=http://localhost:8000/api
+```
+
+Production:
+
+```
+VITE_API_BASE_URL=https://<your-backend>.onrender.com/api
+```
+
+Vite **inlines this at build time**. Changing it on Vercel requires a **redeploy**. If it is missing, the live UI calls `localhost:8000` and login will fail.
 
 ---
 
-## Production Deployment (Render + Vercel + Neon)
-
-The application is architected for zero-maintenance cloud hosting:
+## Production (Neon + Render + Vercel)
 
 ```
-[Users / Browsers]
-        │
-        ├── (UI Requests) ─────────► [Vercel] Vite React Frontend (Edge CDN)
-        │                                  │
-        │                                  ▼ (API Requests via Axios)
-        └── (API Endpoints) ───────► [Render] Django 5 + Gunicorn + WhiteNoise
-                                           │
-                                           ▼ (PostgreSQL Connection)
-                                     [Neon.tech] Serverless PostgreSQL
+Browser  →  Vercel (React / dist)  →  Render (Django + Gunicorn)  →  Neon Postgres
 ```
 
-### 1. Backend (Render Web Service)
-- **Repo Root Directory**: `backend`
-- **Python Version**: `3.11.9` (via `.python-version` or `PYTHON_VERSION` env var)
-- **Build Command**: `bash build.sh` (executes `pip install`, `collectstatic`, and `migrate`)
-- **Start Command**: `gunicorn obe_backend.wsgi:application`
-- **Environment Variables**:
-  - `DEBUG`: `false`
-  - `SECRET_KEY`: *(strong random string)*
-  - `DATABASE_URL`: `postgresql://neondb_owner:...`
-  - `ALLOWED_HOSTS`: `.onrender.com,localhost,127.0.0.1`
-  - `CORS_ALLOWED_ORIGINS`: `https://your-frontend.vercel.app`
+Deploy **database → backend → frontend**, in that order.
 
-### 2. Frontend (Vercel)
-- **Root Directory**: `frontend`
-- **Framework Preset**: `Vite`
-- **Build Command**: `npm run build`
-- **Output Directory**: `dist`
-- **Environment Variables**:
-  - `VITE_API_BASE_URL`: `https://<your-render-backend>.onrender.com/api`
+### 1. Database (Neon)
 
----
+1. Create a Neon project and copy the connection string.
+2. Use the pooled URL with `sslmode=require`.
 
-## How Code Changes Get Updated (CI/CD Workflow)
+### 2. Backend (Render Web Service)
 
-Both **Render** and **Vercel** are connected directly to your GitHub repository (`main` branch). Updates are fully automated:
+Connect the GitHub repo.
 
-### 1. The Standard Update Cycle
-Whenever you make changes to your code locally:
+| Setting | Value |
+|---------|--------|
+| Root directory | `backend` |
+| Runtime | Python 3.11 |
+| Build command | `bash build.sh` |
+| Start command | `gunicorn obe_backend.wsgi:application --bind 0.0.0.0:$PORT --workers 2 --timeout 120` |
 
-```bash
-# 1. Stage modified files
-git add .
+Environment:
 
-# 2. Commit your changes
-git commit -m "Describe what you changed or fixed"
+- `DEBUG` = `false`
+- `SECRET_KEY` = generate
+- `DATABASE_URL` = Neon URL
+- `ALLOWED_HOSTS` = `.onrender.com`
+- `CORS_ALLOWED_ORIGINS` = `https://<your-vercel-app>.vercel.app` (add after Vercel exists; preview URLs are also allowed by regex)
+- `CSRF_TRUSTED_ORIGINS` = same Vercel origin plus `https://<your-backend>.onrender.com`
 
-# 3. Push to GitHub
-git push origin main
-```
+`build.sh` runs `pip install`, `collectstatic`, and `migrate`. Confirm `GET https://<backend>.onrender.com/` returns `{"status":"ok"}`.
 
-### 2. What Happens Automatically on `git push`:
-1. **Frontend (Vercel)**:
-   - Vercel detects changes in the `frontend/` folder.
-   - It runs `npm run build`, creates a new deployment, and swaps traffic to the new version seamlessly with **zero downtime**.
-   - Your live URL is updated in ~20–30 seconds.
+A Blueprint is in `render.yaml` if you prefer **New → Blueprint**. You still paste `DATABASE_URL` and `CORS_ALLOWED_ORIGINS`.
 
-2. **Backend (Render)**:
-   - Render detects changes in the `backend/` folder.
-   - It pulls the new commit and runs `bash build.sh`:
-     - Installs any new dependencies from `requirements.txt`.
-     - Collects updated static assets (`collectstatic`).
-     - Applies any new database migrations (`migrate`).
-   - Restarts Gunicorn workers smoothly without dropping active traffic.
+### 3. Frontend (Vercel)
 
-### 3. Special Scenarios:
-- **Adding new Database Models/Fields**:
-  Always create your migration files locally before pushing:
-  ```bash
-  cd backend
-  python manage.py makemigrations
-  git add .
-  git commit -m "Add new database migrations"
-  git push origin main
-  ```
-  *(Render will automatically run `python manage.py migrate` during the build!)*
+| Setting | Value |
+|---------|--------|
+| Root directory | `frontend` |
+| Framework | Vite |
+| Build | `npm run build` |
+| Output | `dist` |
 
-- **Changing Environment Variables**:
-  - If you change a variable in `.env` (like adding a new secret or changing CORS):
-  - Go to your **Render Dashboard** → **Environment** (or **Vercel Project Settings** → **Environment Variables**).
-  - Update the variable there and save. Both platforms will trigger a fast redeploy with the new settings.
+Environment (Production **and** Preview):
+
+- `VITE_API_BASE_URL` = `https://<your-backend>.onrender.com/api`
+
+`vercel.json` rewrites all routes to `index.html` so React Router works.
+
+Then put the real Vercel URL into Render `CORS_ALLOWED_ORIGINS` and redeploy the backend if needed.
+
+### After each `git push` to `main`
+
+- **Vercel** rebuilds `frontend/` (needs `VITE_API_BASE_URL` already set).
+- **Render** rebuilds `backend/` and runs migrations.
+
+New Django fields: run `python manage.py makemigrations` **locally**, commit the migration files, then push. Do not change secrets in git; edit them on Render / Vercel and redeploy.
+
+### If production login fails
+
+1. Open the built site, DevTools → Network: API host must be Render, not `localhost`.
+2. `CORS_ALLOWED_ORIGINS` must match the Vercel origin exactly (`https://…`, no trailing slash).
+3. Neon must allow the Render region (connection string + SSL).
+4. `SECRET_KEY` must be set or the backend will not boot.
 
