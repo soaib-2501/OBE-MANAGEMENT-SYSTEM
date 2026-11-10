@@ -13,9 +13,7 @@ from .serializers import OpeningReportSerializer
 
 def faculty_course(user, course_id):
     qs = Course.objects.prefetch_related('outcomes__mappings').select_related('faculty')
-    if user.is_faculty_role:
-        qs = qs.filter(faculty=user)
-    return qs.filter(pk=course_id).first()
+    return qs.filter(pk=course_id, faculty=user).first()
 
 
 def historical_years_for(course):

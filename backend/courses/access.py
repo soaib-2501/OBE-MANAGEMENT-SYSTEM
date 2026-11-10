@@ -1,9 +1,14 @@
 def faculty_owns_course(user, course):
-    if user is None or course is None:
+    """Every login, including admin, only owns courses they created."""
+    if user is None or not getattr(user, 'is_authenticated', False) or course is None:
         return False
-    if getattr(user, 'is_faculty_role', False):
-        return course.faculty_id == user.id
-    return True
+    return course.faculty_id == user.id
+
+
+def scope_to_owner(user, qs, lookup='faculty'):
+    if user is None or not getattr(user, 'is_authenticated', False):
+        return qs.none()
+    return qs.filter(**{lookup: user})
 
 
 def owned_course_or_error(user, course, error_cls):

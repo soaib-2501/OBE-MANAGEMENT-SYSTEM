@@ -20,19 +20,14 @@ class AttainmentViewSet(viewsets.ReadOnlyModelViewSet):
     pagination_class = None
 
     def get_queryset(self):
-        qs = super().get_queryset()
-        user = self.request.user
-        if user.is_faculty_role:
-            qs = qs.filter(course__faculty=user)
+        qs = super().get_queryset().filter(course__faculty=self.request.user)
         course_id = self.request.query_params.get('course')
         return qs.filter(course_id=course_id) if course_id else qs
 
     @action(detail=False, methods=['get'])
     def program(self, request):
         course_id = request.query_params.get('course')
-        qs = ProgramAttainment.objects.all()
-        if request.user.is_faculty_role:
-            qs = qs.filter(course__faculty=request.user)
+        qs = ProgramAttainment.objects.filter(course__faculty=request.user)
         if course_id:
             qs = qs.filter(course_id=course_id)
         return Response(ProgramAttainmentSerializer(qs, many=True).data)
@@ -47,7 +42,7 @@ class AttainmentViewSet(viewsets.ReadOnlyModelViewSet):
         course = Course.objects.filter(pk=course_id).first()
         if not course:
             return Response({'error': 'Course not found.'}, status=404)
-        if request.user.is_faculty_role and course.faculty_id != request.user.id:
+        if course.faculty_id != request.user.id:
             return Response({'error': 'Not allowed.'}, status=403)
         co_results, po_results = calculate_for_course(course_id)
         return Response({
@@ -65,7 +60,7 @@ class AttainmentViewSet(viewsets.ReadOnlyModelViewSet):
         course = Course.objects.filter(pk=course_id).first()
         if not course:
             return Response({'error': 'Course not found.'}, status=404)
-        if request.user.is_faculty_role and course.faculty_id != request.user.id:
+        if course.faculty_id != request.user.id:
             return Response({'error': 'Not allowed.'}, status=403)
         return Response(build_sheet(course))
 
@@ -78,7 +73,7 @@ class AttainmentViewSet(viewsets.ReadOnlyModelViewSet):
         course = Course.objects.filter(pk=course_id).first()
         if not course:
             return Response({'error': 'Course not found.'}, status=404)
-        if request.user.is_faculty_role and course.faculty_id != request.user.id:
+        if course.faculty_id != request.user.id:
             return Response({'error': 'Not allowed.'}, status=403)
         year = request.query_params.get('academic_year') or previous_academic_year(course.academic_year)
         base = HistoricalCoAttainment.objects.filter(offering_identity(course))

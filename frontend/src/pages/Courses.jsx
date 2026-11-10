@@ -35,7 +35,6 @@ export default function Courses({ courseKind = 'THEORY' }) {
 
   const { isAdmin } = useAuth();
   const [courses, setCourses] = useState([]);
-  const [loginFaculty, setLoginFaculty] = useState([]);
   const [directory, setDirectory] = useState([]);
   const [sessions, setSessions] = useState([]);
   const [catalog, setCatalog] = useState([]);
@@ -44,6 +43,7 @@ export default function Courses({ courseKind = 'THEORY' }) {
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState(null);
   const [form, setForm] = useState(emptyForm);
+  const [copyFrom, setCopyFrom] = useState('');
   const [error, setError] = useState('');
 
   function load() {
@@ -51,9 +51,6 @@ export default function Courses({ courseKind = 'THEORY' }) {
     api.get('/courses/sessions/').then((res) => setSessions(res.data.results ?? res.data)).catch(() => {});
     api.get('/courses/faculty-directory/?active=1').then((res) => setDirectory(res.data.results ?? res.data)).catch(() => {});
     api.get('/programs/').then((res) => setProgrammes(res.data.results ?? res.data)).catch(() => setProgrammes([]));
-    if (isAdmin) {
-      api.get('/auth/users/?role=FACULTY').then((res) => setLoginFaculty(res.data.results ?? res.data));
-    }
   }
 
   useEffect(load, [isAdmin, courseKind]);
@@ -67,6 +64,19 @@ export default function Courses({ courseKind = 'THEORY' }) {
       .then((res) => setCatalog(res.data.results ?? res.data))
       .catch(() => setCatalog([]));
   }, [form.academic_session, courseKind]);
+
+  useEffect(() => {
+    if (!copyFrom || editingId || !catalog.length) return;
+    const src = courses.find((c) => String(c.id) === String(copyFrom));
+    if (!src) return;
+    const match = catalog.find((row) => row.course_code === src.course_code && row.nba_code === src.nba_code)
+      || catalog.find((row) => row.course_code === src.course_code);
+    if (!match) return;
+    setForm((prev) => {
+      if (String(prev.catalog_entry) === String(match.id)) return prev;
+      return formFromNba({ ...prev, programme: src.programme || prev.programme }, match.id);
+    });
+  }, [catalog, copyFrom, editingId]);
 
   useEffect(() => {
     if (editingId || !showForm || !form.catalog_entry || !programmes.length || !catalog.length) return;
@@ -193,6 +203,7 @@ export default function Courses({ courseKind = 'THEORY' }) {
   function resetForm() {
     setShowForm(false);
     setEditingId(null);
+    setCopyFrom('');
     setForm(emptyForm);
     setError('');
   }
@@ -239,16 +250,23 @@ export default function Courses({ courseKind = 'THEORY' }) {
       program_name: form.program_name || undefined,
       department: form.department || undefined,
     };
-    if (isAdmin) {
-      payload.faculty = form.faculty ? Number(form.faculty) : null;
-    }
     try {
-      const existing = !editingId ? findExistingOffering() : null;
-      const targetId = editingId || existing?.id;
-      if (targetId) {
-        await api.patch(`/courses/${targetId}/`, payload);
+      if (!editingId && copyFrom) {
+        await api.post('/courses/from-previous/', {
+          source: Number(copyFrom),
+          academic_session: payload.academic_session,
+          catalog_entry: payload.catalog_entry,
+          teaching_faculty: payload.teaching_faculty,
+          course_coordinator: payload.course_coordinator,
+        });
       } else {
-        await api.post('/courses/', { ...payload, outcomes: [] });
+        const existing = !editingId ? findExistingOffering() : null;
+        const targetId = editingId || existing?.id;
+        if (targetId) {
+          await api.patch(`/courses/${targetId}/`, payload);
+        } else {
+          await api.post('/courses/', { ...payload, outcomes: [] });
+        }
       }
       resetForm();
       load();
@@ -278,13 +296,13 @@ export default function Courses({ courseKind = 'THEORY' }) {
           <h1 className="text-2xl font-bold text-slate-900">{pageTitle}</h1>
           {filterSessions.length > 0 && (
             <select className="border rounded px-2 py-1.5 text-sm" value={sessionFilter} onChange={(e) => setSessionFilter(e.target.value)}>
-              <option value="">All sessions</option>
+              <option value="">All my sessions</option>
               {filterSessions.map((s) => <option key={s} value={s}>{s}</option>)}
             </select>
           )}
         </div>
         <button
-          onClick={() => { if (showForm) resetForm(); else { setShowForm(true); setEditingId(null); setForm(emptyForm); } }}
+          onClick={() => { if (showForm) resetForm(); else { setShowForm(true); setEditingId(null); setCopyFrom(''); setForm(emptyForm); } }}
           className="bg-slate-900 hover:bg-slate-800 text-white px-4 py-2 rounded text-sm font-semibold"
         >
           {showForm ? 'Cancel' : newLabel}
@@ -297,6 +315,44 @@ export default function Courses({ courseKind = 'THEORY' }) {
           <p className="col-span-2 text-sm font-semibold text-slate-700">
             {editingId ? formTitleEdit : formTitleNew}
           </p>
+          {!editingId && (
+            <label className="block text-sm col-span-2">
+              <span className="block text-xs font-medium text-slate-600 mb-1">Start from a previous course (optional)</span>
+              <select className="w-full border rounded px-3 py-2 text-sm" value={copyFrom}
+                onChange={(e) => {
+                  const id = e.target.value;
+                  setCopyFrom(id);
+                  const src = courses.find((c) => String(c.id) === String(id));
+                  if (!src) return;
+                  setForm((prev) => ({
+                    ...prev,
+                    academic_session: '',
+                    catalog_entry: '',
+                    teaching_faculty: src.teaching_faculty || '',
+                    course_coordinator: src.course_coordinator || '',
+                    programme: src.programme || '',
+                    program_name: src.program_name || '',
+                    department: src.department || '',
+                    credits: src.credits ?? prev.credits,
+                    po_count: src.po_count ?? prev.po_count,
+                    pso_count: src.pso_count ?? prev.pso_count,
+                  }));
+                }}>
+                <option value="">Blank course</option>
+                {courses.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.session_label || c.academic_year} — {c.course_code} {c.course_name}
+                    {c.program_name ? ` (${c.program_name})` : ''}
+                  </option>
+                ))}
+              </select>
+              {copyFrom && (
+                <p className="text-xs text-slate-500 mt-1">
+                  A new course is created for the session you pick. Course description, opening report, closing report, assessment tools, roster, marks, and the attainment sheet are copied and stay fully editable. The previous course is not changed.
+                </p>
+              )}
+            </label>
+          )}
           <label className="block text-sm col-span-2">
             <span className="block text-xs font-medium text-slate-600 mb-1">Session</span>
             <select className="w-full border rounded px-3 py-2 text-sm" required value={form.academic_session}
@@ -409,20 +465,8 @@ export default function Courses({ courseKind = 'THEORY' }) {
             <input type="number" min="0" max="8" className="w-full border rounded px-3 py-2 text-sm"
               value={form.pso_count} onChange={(e) => setForm({ ...form, pso_count: Number(e.target.value) })} />
           </label>
-          {isAdmin && (
-            <label className="block text-sm">
-              <span className="block text-xs font-medium text-slate-600 mb-1">Login account (owner)</span>
-              <select className="w-full border rounded px-3 py-2 text-sm" value={form.faculty}
-                onChange={(e) => setForm({ ...form, faculty: e.target.value })}>
-                <option value="">Assign faculty login later</option>
-                {loginFaculty.map((f) => (
-                  <option key={f.id} value={f.id}>{f.first_name} {f.last_name} (@{f.username})</option>
-                ))}
-              </select>
-            </label>
-          )}
           <button type="submit" className="col-span-2 bg-slate-900 text-white py-2 rounded text-sm font-semibold">
-            {editingId ? updateLabel : createLabel}
+            {editingId ? updateLabel : (copyFrom ? 'Create new session from previous documents' : createLabel)}
           </button>
         </form>
       )}
@@ -432,7 +476,7 @@ export default function Courses({ courseKind = 'THEORY' }) {
       <div className="bg-white shadow rounded-lg divide-y">
         {visible.length === 0 && (
           <p className="p-6 text-sm text-slate-400">
-            {isLab ? 'No lab courses yet — create one above.' : 'No courses yet — create one above.'}
+            {isLab ? 'No lab courses on your account yet.' : 'No courses on your account yet. Previous sessions stay in this list once you create them.'}
           </p>
         )}
         {visible.map((c) => (

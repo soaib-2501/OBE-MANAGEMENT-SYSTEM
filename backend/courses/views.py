@@ -1,6 +1,10 @@
-from rest_framework import viewsets, permissions
+from rest_framework import viewsets, permissions, status
+from rest_framework.decorators import action
+from rest_framework.response import Response
 
 from users.permissions import IsAdminRole
+from .access import scope_to_owner
+from .copy_offering import catalog_for_new_session, copy_offering_to_session, load_session
 from .models import (
     AcademicSession, FacultyProfile, NbaSubjectCatalog, Course, CourseOutcome, CoPoMapping,
     copy_catalog_from_previous,
@@ -12,9 +16,7 @@ from .serializers import (
 
 
 def faculty_course_qs(user, qs):
-    if user.is_faculty_role:
-        return qs.filter(faculty=user)
-    return qs
+    return scope_to_owner(user, qs, 'faculty')
 
 
 class AcademicSessionViewSet(viewsets.ModelViewSet):
@@ -88,10 +90,7 @@ class NbaSubjectCatalogViewSet(viewsets.ModelViewSet):
 
 
 class CourseViewSet(viewsets.ModelViewSet):
-    """
-    Faculty see only their own course offerings (per session).
-    Admins see everything and can assign faculty.
-    """
+    """Each login sees and edits only the offerings they created."""
     serializer_class = CourseSerializer
     permission_classes = [permissions.IsAuthenticated]
     pagination_class = None
@@ -114,21 +113,34 @@ class CourseViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         user = self.request.user
-        extra = {}
-        if user.is_faculty_role:
-            extra['faculty'] = user
-            coord = serializer.validated_data.get('course_coordinator')
-            if not serializer.validated_data.get('coordinator_names'):
-                extra['coordinator_names'] = (
-                    coord.full_name if coord else (user.get_full_name() or user.username)
-                )
+        extra = {'faculty': user}
+        coord = serializer.validated_data.get('course_coordinator')
+        if not serializer.validated_data.get('coordinator_names'):
+            extra['coordinator_names'] = (
+                coord.full_name if coord else (user.get_full_name() or user.username)
+            )
         serializer.save(**extra)
 
     def perform_update(self, serializer):
-        if self.request.user.is_faculty_role:
-            serializer.save(faculty=self.request.user)
-        else:
-            serializer.save()
+        serializer.save(faculty=self.request.user)
+
+    @action(detail=False, methods=['post'], url_path='from-previous')
+    def from_previous(self, request):
+        source = self.get_queryset().filter(pk=request.data.get('source')).first()
+        if not source:
+            return Response({'detail': 'Previous course was not found on your account.'}, status=status.HTTP_404_NOT_FOUND)
+        session = load_session(request.data.get('academic_session'))
+        catalog = catalog_for_new_session(source, session, request.data.get('catalog_entry'))
+        from courses.models import FacultyProfile
+        teaching = coordinator = None
+        if request.data.get('teaching_faculty'):
+            teaching = FacultyProfile.objects.filter(pk=request.data.get('teaching_faculty')).first()
+        if request.data.get('course_coordinator'):
+            coordinator = FacultyProfile.objects.filter(pk=request.data.get('course_coordinator')).first()
+        course = copy_offering_to_session(
+            request.user, source, session, catalog, teaching, coordinator,
+        )
+        return Response(CourseSerializer(course, context={'request': request}).data, status=status.HTTP_201_CREATED)
 
 
 class CourseOutcomeViewSet(viewsets.ModelViewSet):
@@ -138,8 +150,7 @@ class CourseOutcomeViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         qs = CourseOutcome.objects.select_related('course').prefetch_related('mappings')
-        if self.request.user.is_faculty_role:
-            qs = qs.filter(course__faculty=self.request.user)
+        qs = scope_to_owner(self.request.user, qs, 'course__faculty')
         course_id = self.request.query_params.get('course')
         if course_id:
             qs = qs.filter(course_id=course_id)
@@ -153,6 +164,5 @@ class CoPoMappingViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         qs = CoPoMapping.objects.select_related('course_outcome__course')
-        if self.request.user.is_faculty_role:
-            qs = qs.filter(course_outcome__course__faculty=self.request.user)
+        qs = scope_to_owner(self.request.user, qs, 'course_outcome__course__faculty')
         return qs

@@ -15,9 +15,8 @@ from .serializers import (
 
 
 def faculty_scope(user, qs, lookup='course__faculty'):
-    if user.is_faculty_role:
-        return qs.filter(**{lookup: user})
-    return qs
+    from courses.access import scope_to_owner
+    return scope_to_owner(user, qs, lookup)
 
 
 class AssessmentViewSet(viewsets.ModelViewSet):
@@ -40,7 +39,7 @@ class AssessmentViewSet(viewsets.ModelViewSet):
         course = Course.objects.filter(pk=course_id).first()
         if not course:
             return Response({'error': 'Course not found.'}, status=404)
-        if request.user.is_faculty_role and course.faculty_id != request.user.id:
+        if not faculty_owns_course(request.user, course):
             return Response({'error': 'Not allowed.'}, status=403)
         if getattr(course, 'is_lab', False) or getattr(course, 'course_kind', '') == 'LAB':
             created = ensure_lab_blocks(course)

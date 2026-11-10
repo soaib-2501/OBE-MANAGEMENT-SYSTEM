@@ -206,7 +206,7 @@ class CourseSerializer(serializers.ModelSerializer):
         if programme is None and self.instance is not None and 'programme' not in attrs:
             programme = self.instance.programme
         attrs = apply_programme_fields(attrs, programme, raw)
-        if user is not None and getattr(user, 'is_faculty_role', False):
+        if user is not None and getattr(user, 'is_authenticated', False):
             attrs['faculty'] = user
         coordinator = attrs.get('course_coordinator', getattr(self.instance, 'course_coordinator', None))
         if coordinator and not attrs.get('coordinator_names'):

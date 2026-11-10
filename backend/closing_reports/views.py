@@ -16,9 +16,7 @@ def faculty_course(user, course_id, prefetch=True):
     qs = Course.objects.all()
     if prefetch:
         qs = qs.prefetch_related('outcomes__mappings').select_related('faculty')
-    if user.is_faculty_role:
-        qs = qs.filter(faculty=user)
-    return qs.filter(pk=course_id).first()
+    return qs.filter(pk=course_id, faculty=user).first()
 
 
 def payload(course, report, force_tables=False):

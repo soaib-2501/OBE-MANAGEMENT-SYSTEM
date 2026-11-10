@@ -14,8 +14,7 @@ class DashboardSummaryView(APIView):
         courses = Course.objects.select_related(
             'faculty', 'academic_session', 'teaching_faculty',
         ).all()
-        if request.user.is_faculty_role:
-            courses = courses.filter(faculty=request.user)
+        courses = courses.filter(faculty=request.user)
 
         courses = courses.annotate(
             outcome_count=Count('outcomes', distinct=True),

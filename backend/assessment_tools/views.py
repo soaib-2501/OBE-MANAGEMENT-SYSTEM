@@ -12,9 +12,7 @@ from .serializers import AssessmentToolsDocumentSerializer
 
 def faculty_course(user, course_id):
     qs = Course.objects.prefetch_related('outcomes').select_related('faculty')
-    if user.is_faculty_role:
-        qs = qs.filter(faculty=user)
-    return qs.filter(pk=course_id).first()
+    return qs.filter(pk=course_id, faculty=user).first()
 
 
 class AssessmentToolsDetailView(APIView):
