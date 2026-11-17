@@ -48,14 +48,17 @@ export default function Courses({ courseKind = 'THEORY' }) {
   const [error, setError] = useState('');
 
   function load() {
-    api.get(`/courses/?course_kind=${courseKind}`).then((res) => setCourses(res.data.results ?? res.data));
-    api.get(`/courses/templates/?course_kind=${courseKind}`).then((res) => setTemplates(res.data.results ?? res.data)).catch(() => setTemplates([]));
-    api.get('/courses/sessions/').then((res) => setSessions(res.data.results ?? res.data)).catch(() => {});
+    api.get(`/courses/?course_kind=${courseKind}`).then((res) => setCourses(res.data.results ?? res.data)).catch(() => setError('Could not load your courses. Refresh the page.'));
+    api.get(`/courses/templates/?course_kind=${courseKind}`).then((res) => setTemplates(res.data.results ?? res.data)).catch(() => {
+      setTemplates([]);
+      setError('Could not load courses to copy. Refresh the page.');
+    });
+    api.get('/courses/sessions/').then((res) => setSessions(res.data.results ?? res.data)).catch(() => setError('Could not load sessions. Refresh the page.'));
     api.get('/courses/faculty-directory/?active=1').then((res) => setDirectory(res.data.results ?? res.data)).catch(() => {});
     api.get('/programs/').then((res) => setProgrammes(res.data.results ?? res.data)).catch(() => setProgrammes([]));
   }
 
-  useEffect(load, [isAdmin, courseKind]);
+  useEffect(load, [isAdmin, courseKind, showForm]);
 
   useEffect(() => {
     if (!form.academic_session) {
@@ -397,8 +400,13 @@ export default function Courses({ courseKind = 'THEORY' }) {
           <label className="block text-sm col-span-2">
             <span className="block text-xs font-medium text-slate-600 mb-1">NBA code / subject</span>
             <select className="w-full border rounded px-3 py-2 text-sm" required value={form.catalog_entry}
+              disabled={!form.academic_session}
               onChange={(e) => setForm((prev) => formFromNba(prev, e.target.value))}>
-              <option value="">{isLab ? 'Select lab NBA subject' : 'Select NBA subject'}</option>
+              <option value="">
+                {!form.academic_session
+                  ? 'Select a session first'
+                  : (isLab ? 'Select lab NBA subject' : 'Select NBA subject')}
+              </option>
               {catalog.map((row) => (
                 <option key={row.id} value={row.id}>{row.label}</option>
               ))}
