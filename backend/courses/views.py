@@ -11,12 +11,21 @@ from .models import (
 )
 from .serializers import (
     AcademicSessionSerializer, FacultyProfileSerializer, NbaSubjectCatalogSerializer,
-    CourseSerializer, CourseOutcomeSerializer, CoPoMappingSerializer,
+    CourseSerializer, CourseOutcomeSerializer, CoPoMappingSerializer, CourseTemplateSerializer,
 )
 
 
 def faculty_course_qs(user, qs):
     return scope_to_owner(user, qs, 'faculty')
+
+
+def _optional_int(value):
+    if value in (None, ''):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 class AcademicSessionViewSet(viewsets.ModelViewSet):
@@ -90,7 +99,7 @@ class NbaSubjectCatalogViewSet(viewsets.ModelViewSet):
 
 
 class CourseViewSet(viewsets.ModelViewSet):
-    """Each login sees and edits only the offerings they created."""
+    """Each login edits only the offerings they created. Templates may be copied from anyone."""
     serializer_class = CourseSerializer
     permission_classes = [permissions.IsAuthenticated]
     pagination_class = None
@@ -124,21 +133,44 @@ class CourseViewSet(viewsets.ModelViewSet):
     def perform_update(self, serializer):
         serializer.save(faculty=self.request.user)
 
+    @action(detail=False, methods=['get'], url_path='templates')
+    def templates(self, request):
+        qs = Course.objects.select_related('faculty', 'academic_session').exclude(faculty__isnull=True)
+        kind = (request.query_params.get('course_kind') or '').upper()
+        if kind in ('LAB', 'THEORY'):
+            qs = qs.filter(course_kind=kind)
+        data = CourseTemplateSerializer(qs, many=True).data
+        return Response(data)
+
     @action(detail=False, methods=['post'], url_path='from-previous')
     def from_previous(self, request):
-        source = self.get_queryset().filter(pk=request.data.get('source')).first()
+        source = Course.objects.filter(pk=request.data.get('source')).first()
         if not source:
-            return Response({'detail': 'Previous course was not found on your account.'}, status=status.HTTP_404_NOT_FOUND)
+            return Response({'detail': 'That course was not found.'}, status=status.HTTP_404_NOT_FOUND)
         session = load_session(request.data.get('academic_session'))
         catalog = catalog_for_new_session(source, session, request.data.get('catalog_entry'))
         from courses.models import FacultyProfile
-        teaching = coordinator = None
+        from programs.models import Programme
+        teaching = coordinator = programme = None
         if request.data.get('teaching_faculty'):
             teaching = FacultyProfile.objects.filter(pk=request.data.get('teaching_faculty')).first()
         if request.data.get('course_coordinator'):
             coordinator = FacultyProfile.objects.filter(pk=request.data.get('course_coordinator')).first()
+        if request.data.get('programme'):
+            programme = Programme.objects.filter(pk=request.data.get('programme')).first()
         course = copy_offering_to_session(
-            request.user, source, session, catalog, teaching, coordinator,
+            request.user,
+            source,
+            session,
+            catalog,
+            teaching,
+            coordinator,
+            programme=programme,
+            program_name=(request.data.get('program_name') or '').strip(),
+            department=(request.data.get('department') or '').strip(),
+            po_count=_optional_int(request.data.get('po_count')),
+            pso_count=_optional_int(request.data.get('pso_count')),
+            credits=_optional_int(request.data.get('credits')),
         )
         return Response(CourseSerializer(course, context={'request': request}).data, status=status.HTTP_201_CREATED)
 

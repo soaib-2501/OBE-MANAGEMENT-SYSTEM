@@ -155,6 +155,25 @@ class LectureModuleSerializer(serializers.ModelSerializer):
         extra_kwargs = {'id': {'read_only': False, 'required': False}}
 
 
+class CourseTemplateSerializer(serializers.ModelSerializer):
+    """Read-only summary so a new offering can start from any faculty's course."""
+    faculty_name = serializers.SerializerMethodField()
+    session_label = serializers.CharField(read_only=True)
+
+    class Meta:
+        model = Course
+        fields = [
+            'id', 'course_code', 'course_name', 'program_name', 'department', 'nba_code',
+            'session_label', 'academic_year', 'course_kind', 'faculty', 'faculty_name',
+            'teaching_faculty', 'course_coordinator', 'programme', 'credits', 'po_count', 'pso_count',
+        ]
+
+    def get_faculty_name(self, obj):
+        if not obj.faculty_id:
+            return None
+        return obj.faculty.get_full_name() or obj.faculty.username
+
+
 class CourseSerializer(serializers.ModelSerializer):
     outcomes = CourseOutcomeSerializer(many=True, required=False)
     faculty_name = serializers.SerializerMethodField()

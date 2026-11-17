@@ -48,18 +48,18 @@ def catalog_for_new_session(source, session, catalog_id=None):
 
 
 @transaction.atomic
-def copy_offering_to_session(user, source, session, catalog=None, teaching_faculty=None, course_coordinator=None):
-    if source.faculty_id != user.id:
-        raise ValidationError('You can only copy your own courses.')
-    if source.academic_session_id and source.academic_session_id == session.id:
-        raise ValidationError('Choose a different session. The previous course stays unchanged.')
-
+def copy_offering_to_session(
+    user, source, session, catalog=None, teaching_faculty=None, course_coordinator=None,
+    programme=None, program_name='', department='', po_count=None, pso_count=None, credits=None,
+):
+    """Copy any offering onto the signed-in user's account. The source row is never updated."""
     final_code = catalog.course_code if catalog is not None else source.course_code
+    final_programme = programme if programme is not None else source.programme
     exists = Course.objects.filter(
         faculty=user,
         course_code=final_code,
         academic_year=session.label,
-        programme=source.programme,
+        programme=final_programme,
     ).exists()
     if exists:
         raise ValidationError(
@@ -88,6 +88,18 @@ def copy_offering_to_session(user, source, session, catalog=None, teaching_facul
         course.semester_number = catalog.semester_number
         if catalog.credits:
             course.credits = catalog.credits
+    if programme is not None:
+        course.programme = programme
+    if program_name:
+        course.program_name = program_name
+    if department:
+        course.department = department
+    if po_count is not None:
+        course.po_count = po_count
+    if pso_count is not None:
+        course.pso_count = pso_count
+    if credits:
+        course.credits = credits
     course.save()
 
     co_map = {}

@@ -33,8 +33,9 @@ export default function Courses({ courseKind = 'THEORY' }) {
   const createLabel = isLab ? 'Create Lab Course' : 'Create Course';
   const updateLabel = isLab ? 'Update Lab Course' : 'Update Course';
 
-  const { isAdmin } = useAuth();
+  const { isAdmin, user } = useAuth();
   const [courses, setCourses] = useState([]);
+  const [templates, setTemplates] = useState([]);
   const [directory, setDirectory] = useState([]);
   const [sessions, setSessions] = useState([]);
   const [catalog, setCatalog] = useState([]);
@@ -48,6 +49,7 @@ export default function Courses({ courseKind = 'THEORY' }) {
 
   function load() {
     api.get(`/courses/?course_kind=${courseKind}`).then((res) => setCourses(res.data.results ?? res.data));
+    api.get(`/courses/templates/?course_kind=${courseKind}`).then((res) => setTemplates(res.data.results ?? res.data)).catch(() => setTemplates([]));
     api.get('/courses/sessions/').then((res) => setSessions(res.data.results ?? res.data)).catch(() => {});
     api.get('/courses/faculty-directory/?active=1').then((res) => setDirectory(res.data.results ?? res.data)).catch(() => {});
     api.get('/programs/').then((res) => setProgrammes(res.data.results ?? res.data)).catch(() => setProgrammes([]));
@@ -67,7 +69,7 @@ export default function Courses({ courseKind = 'THEORY' }) {
 
   useEffect(() => {
     if (!copyFrom || editingId || !catalog.length) return;
-    const src = courses.find((c) => String(c.id) === String(copyFrom));
+    const src = templates.find((c) => String(c.id) === String(copyFrom));
     if (!src) return;
     const match = catalog.find((row) => row.course_code === src.course_code && row.nba_code === src.nba_code)
       || catalog.find((row) => row.course_code === src.course_code);
@@ -76,7 +78,7 @@ export default function Courses({ courseKind = 'THEORY' }) {
       if (String(prev.catalog_entry) === String(match.id)) return prev;
       return formFromNba({ ...prev, programme: src.programme || prev.programme }, match.id);
     });
-  }, [catalog, copyFrom, editingId]);
+  }, [catalog, copyFrom, editingId, templates]);
 
   useEffect(() => {
     if (editingId || !showForm || !form.catalog_entry || !programmes.length || !catalog.length) return;
@@ -100,6 +102,16 @@ export default function Courses({ courseKind = 'THEORY' }) {
   const visible = sessionFilter
     ? courses.filter((c) => (c.session_label || c.academic_year) === sessionFilter)
     : courses;
+
+  const myTemplates = templates.filter((c) => user && String(c.faculty) === String(user.id));
+  const otherTemplates = templates.filter((c) => !user || String(c.faculty) !== String(user.id));
+
+  function templateLabel(c, showOwner) {
+    const session = c.session_label || c.academic_year;
+    const programme = c.program_name ? ` (${c.program_name})` : '';
+    const owner = showOwner && c.faculty_name ? ` · ${c.faculty_name}` : '';
+    return `${session} — ${c.course_code} ${c.course_name}${programme}${owner}`;
+  }
 
   const directoryByCampus = useMemo(() => {
     const order = ['SECTOR_62', 'SECTOR_128', 'UNKNOWN'];
@@ -258,6 +270,12 @@ export default function Courses({ courseKind = 'THEORY' }) {
           catalog_entry: payload.catalog_entry,
           teaching_faculty: payload.teaching_faculty,
           course_coordinator: payload.course_coordinator,
+          programme: payload.programme,
+          program_name: payload.program_name || '',
+          department: payload.department || '',
+          po_count: payload.po_count,
+          pso_count: payload.pso_count,
+          credits: payload.credits,
         });
       } else {
         const existing = !editingId ? findExistingOffering() : null;
@@ -317,12 +335,12 @@ export default function Courses({ courseKind = 'THEORY' }) {
           </p>
           {!editingId && (
             <label className="block text-sm col-span-2">
-              <span className="block text-xs font-medium text-slate-600 mb-1">Start from a previous course (optional)</span>
+              <span className="block text-xs font-medium text-slate-600 mb-1">Start from a course (optional)</span>
               <select className="w-full border rounded px-3 py-2 text-sm" value={copyFrom}
                 onChange={(e) => {
                   const id = e.target.value;
                   setCopyFrom(id);
-                  const src = courses.find((c) => String(c.id) === String(id));
+                  const src = templates.find((c) => String(c.id) === String(id));
                   if (!src) return;
                   setForm((prev) => ({
                     ...prev,
@@ -339,16 +357,24 @@ export default function Courses({ courseKind = 'THEORY' }) {
                   }));
                 }}>
                 <option value="">Blank course</option>
-                {courses.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.session_label || c.academic_year} — {c.course_code} {c.course_name}
-                    {c.program_name ? ` (${c.program_name})` : ''}
-                  </option>
-                ))}
+                {myTemplates.length > 0 && (
+                  <optgroup label="My courses">
+                    {myTemplates.map((c) => (
+                      <option key={c.id} value={c.id}>{templateLabel(c, false)}</option>
+                    ))}
+                  </optgroup>
+                )}
+                {otherTemplates.length > 0 && (
+                  <optgroup label="Other faculty">
+                    {otherTemplates.map((c) => (
+                      <option key={c.id} value={c.id}>{templateLabel(c, true)}</option>
+                    ))}
+                  </optgroup>
+                )}
               </select>
               {copyFrom && (
                 <p className="text-xs text-slate-500 mt-1">
-                  A new course is created for the session you pick. Course description, opening report, closing report, assessment tools, roster, marks, and the attainment sheet are copied and stay fully editable. The previous course is not changed.
+                  This creates a new course on your account for the session and subject you pick. Course description, opening report, closing report, assessment tools, roster, marks, and the attainment sheet are copied and stay fully editable. The original course is not changed.
                 </p>
               )}
             </label>
