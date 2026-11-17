@@ -124,11 +124,61 @@ class CourseViewSet(viewsets.ModelViewSet):
     def perform_update(self, serializer):
         serializer.save(faculty=self.request.user)
 
+    @action(detail=False, methods=['get'], url_path='copy-sources')
+    def copy_sources(self, request):
+        """
+        List all course offerings that can be used as templates/sources.
+        Includes both the requesting user's previous courses and other faculty courses.
+        """
+        qs = Course.objects.select_related(
+            'faculty', 'academic_session', 'catalog_entry', 'teaching_faculty', 'course_coordinator', 'programme',
+        ).all()
+
+        kind = (request.query_params.get('course_kind') or '').upper()
+        if kind in ('LAB', 'THEORY'):
+            qs = qs.filter(course_kind=kind)
+
+        user = request.user
+        results = []
+        for c in qs:
+            is_mine = (c.faculty_id == user.id)
+            fac_name = ''
+            if c.teaching_faculty_id and c.teaching_faculty:
+                fac_name = c.teaching_faculty.full_name
+            elif c.faculty:
+                fac_name = c.faculty.get_full_name() or c.faculty.username
+            if not fac_name:
+                fac_name = 'Other Faculty'
+
+            results.append({
+                'id': c.id,
+                'course_code': c.course_code,
+                'course_name': c.course_name,
+                'nba_code': c.nba_code,
+                'academic_year': c.academic_year,
+                'session_label': c.session_label,
+                'academic_session': c.academic_session_id,
+                'program_name': c.program_name,
+                'department': c.department,
+                'programme': c.programme_id,
+                'credits': c.credits,
+                'po_count': c.po_count,
+                'pso_count': c.pso_count,
+                'course_kind': c.course_kind,
+                'teaching_faculty': c.teaching_faculty_id,
+                'course_coordinator': c.course_coordinator_id,
+                'faculty_name': fac_name,
+                'is_mine': is_mine,
+            })
+
+        results.sort(key=lambda x: (not x['is_mine'], x['course_code'], x['academic_year']))
+        return Response(results)
+
     @action(detail=False, methods=['post'], url_path='from-previous')
     def from_previous(self, request):
-        source = self.get_queryset().filter(pk=request.data.get('source')).first()
+        source = Course.objects.filter(pk=request.data.get('source')).first()
         if not source:
-            return Response({'detail': 'Previous course was not found on your account.'}, status=status.HTTP_404_NOT_FOUND)
+            return Response({'detail': 'Selected course was not found.'}, status=status.HTTP_404_NOT_FOUND)
         session = load_session(request.data.get('academic_session'))
         catalog = catalog_for_new_session(source, session, request.data.get('catalog_entry'))
         from courses.models import FacultyProfile

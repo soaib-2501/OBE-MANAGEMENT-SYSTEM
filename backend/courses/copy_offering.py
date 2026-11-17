@@ -49,10 +49,8 @@ def catalog_for_new_session(source, session, catalog_id=None):
 
 @transaction.atomic
 def copy_offering_to_session(user, source, session, catalog=None, teaching_faculty=None, course_coordinator=None):
-    if source.faculty_id != user.id:
-        raise ValidationError('You can only copy your own courses.')
-    if source.academic_session_id and source.academic_session_id == session.id:
-        raise ValidationError('Choose a different session. The previous course stays unchanged.')
+    if source.faculty_id == user.id and source.academic_session_id and source.academic_session_id == session.id:
+        raise ValidationError('Choose a different session. Your existing course in this session stays unchanged.')
 
     final_code = catalog.course_code if catalog is not None else source.course_code
     exists = Course.objects.filter(
@@ -72,7 +70,9 @@ def copy_offering_to_session(user, source, session, catalog=None, teaching_facul
         catalog_entry=catalog,
         semester=session.semester_type,
         academic_year=session.label,
-        teaching_faculty=teaching_faculty or source.teaching_faculty,
+        teaching_faculty=teaching_faculty or (
+            getattr(user, 'faculty_profile', None) or source.teaching_faculty
+        ),
         course_coordinator=course_coordinator or source.course_coordinator,
     )
     for name, value in _values(source, {

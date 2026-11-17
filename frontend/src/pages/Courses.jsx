@@ -35,6 +35,7 @@ export default function Courses({ courseKind = 'THEORY' }) {
 
   const { isAdmin } = useAuth();
   const [courses, setCourses] = useState([]);
+  const [copySources, setCopySources] = useState([]);
   const [directory, setDirectory] = useState([]);
   const [sessions, setSessions] = useState([]);
   const [catalog, setCatalog] = useState([]);
@@ -48,6 +49,9 @@ export default function Courses({ courseKind = 'THEORY' }) {
 
   function load() {
     api.get(`/courses/?course_kind=${courseKind}`).then((res) => setCourses(res.data.results ?? res.data));
+    api.get(`/courses/copy-sources/?course_kind=${courseKind}`)
+      .then((res) => setCopySources(res.data.results ?? res.data))
+      .catch(() => setCopySources([]));
     api.get('/courses/sessions/').then((res) => setSessions(res.data.results ?? res.data)).catch(() => {});
     api.get('/courses/faculty-directory/?active=1').then((res) => setDirectory(res.data.results ?? res.data)).catch(() => {});
     api.get('/programs/').then((res) => setProgrammes(res.data.results ?? res.data)).catch(() => setProgrammes([]));
@@ -67,7 +71,7 @@ export default function Courses({ courseKind = 'THEORY' }) {
 
   useEffect(() => {
     if (!copyFrom || editingId || !catalog.length) return;
-    const src = courses.find((c) => String(c.id) === String(copyFrom));
+    const src = copySources.find((c) => String(c.id) === String(copyFrom));
     if (!src) return;
     const match = catalog.find((row) => row.course_code === src.course_code && row.nba_code === src.nba_code)
       || catalog.find((row) => row.course_code === src.course_code);
@@ -76,7 +80,7 @@ export default function Courses({ courseKind = 'THEORY' }) {
       if (String(prev.catalog_entry) === String(match.id)) return prev;
       return formFromNba({ ...prev, programme: src.programme || prev.programme }, match.id);
     });
-  }, [catalog, copyFrom, editingId]);
+  }, [catalog, copyFrom, editingId, copySources]);
 
   useEffect(() => {
     if (editingId || !showForm || !form.catalog_entry || !programmes.length || !catalog.length) return;
@@ -100,6 +104,10 @@ export default function Courses({ courseKind = 'THEORY' }) {
   const visible = sessionFilter
     ? courses.filter((c) => (c.session_label || c.academic_year) === sessionFilter)
     : courses;
+
+  const mySources = useMemo(() => copySources.filter((c) => c.is_mine), [copySources]);
+  const otherSources = useMemo(() => copySources.filter((c) => !c.is_mine), [copySources]);
+  const selectedTemplate = useMemo(() => copySources.find((c) => String(c.id) === String(copyFrom)), [copySources, copyFrom]);
 
   const directoryByCampus = useMemo(() => {
     const order = ['SECTOR_62', 'SECTOR_128', 'UNKNOWN'];
@@ -317,18 +325,18 @@ export default function Courses({ courseKind = 'THEORY' }) {
           </p>
           {!editingId && (
             <label className="block text-sm col-span-2">
-              <span className="block text-xs font-medium text-slate-600 mb-1">Start from a previous course (optional)</span>
-              <select className="w-full border rounded px-3 py-2 text-sm" value={copyFrom}
+              <span className="block text-xs font-medium text-slate-600 mb-1">Start from a previous course / template (optional)</span>
+              <select className="w-full border rounded px-3 py-2 text-sm bg-white" value={copyFrom}
                 onChange={(e) => {
                   const id = e.target.value;
                   setCopyFrom(id);
-                  const src = courses.find((c) => String(c.id) === String(id));
+                  const src = copySources.find((c) => String(c.id) === String(id));
                   if (!src) return;
                   setForm((prev) => ({
                     ...prev,
                     academic_session: '',
                     catalog_entry: '',
-                    teaching_faculty: src.teaching_faculty || '',
+                    teaching_faculty: src.is_mine ? (src.teaching_faculty || '') : '',
                     course_coordinator: src.course_coordinator || '',
                     programme: src.programme || '',
                     program_name: src.program_name || '',
@@ -338,18 +346,40 @@ export default function Courses({ courseKind = 'THEORY' }) {
                     pso_count: src.pso_count ?? prev.pso_count,
                   }));
                 }}>
-                <option value="">Blank course</option>
-                {courses.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.session_label || c.academic_year} — {c.course_code} {c.course_name}
-                    {c.program_name ? ` (${c.program_name})` : ''}
-                  </option>
-                ))}
+                <option value="">Blank course (start from scratch)</option>
+                {mySources.length > 0 && (
+                  <optgroup label="My Previous Courses">
+                    {mySources.map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.session_label || c.academic_year} — {c.course_code} {c.course_name}
+                        {c.program_name ? ` (${c.program_name})` : ''}
+                      </option>
+                    ))}
+                  </optgroup>
+                )}
+                {otherSources.length > 0 && (
+                  <optgroup label="Other Faculty Courses (Templates)">
+                    {otherSources.map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.session_label || c.academic_year} — {c.course_code} {c.course_name}
+                        {c.program_name ? ` (${c.program_name})` : ''} — by {c.faculty_name || 'Faculty'}
+                      </option>
+                    ))}
+                  </optgroup>
+                )}
               </select>
-              {copyFrom && (
-                <p className="text-xs text-slate-500 mt-1">
-                  A new course is created for the session you pick. Course description, opening report, closing report, assessment tools, roster, marks, and the attainment sheet are copied and stay fully editable. The previous course is not changed.
-                </p>
+              {copyFrom && selectedTemplate && (
+                <div className={`mt-2 rounded p-2.5 text-xs ${selectedTemplate.is_mine ? 'bg-blue-50 text-blue-800 border border-blue-200' : 'bg-emerald-50 text-emerald-800 border border-emerald-200'}`}>
+                  {selectedTemplate.is_mine ? (
+                    <p>
+                      <strong>Your previous course:</strong> A new course offering will be created for the session you pick. Course description, opening report, closing report, assessment tools, roster, marks, and the attainment sheet are copied and stay fully editable. The previous course is not changed.
+                    </p>
+                  ) : (
+                    <p>
+                      <strong>Template from {selectedTemplate.faculty_name || 'another faculty'}:</strong> All course documents (Course Description, outcomes, CO–PO mappings, syllabus modules, assessment tools, and reports) will be cloned into <em>your own</em> course offering for the selected session. You will have full ownership and can edit every document. The original course stays untouched.
+                    </p>
+                  )}
+                </div>
               )}
             </label>
           )}
@@ -466,7 +496,11 @@ export default function Courses({ courseKind = 'THEORY' }) {
               value={form.pso_count} onChange={(e) => setForm({ ...form, pso_count: Number(e.target.value) })} />
           </label>
           <button type="submit" className="col-span-2 bg-slate-900 text-white py-2 rounded text-sm font-semibold">
-            {editingId ? updateLabel : (copyFrom ? 'Create new session from previous documents' : createLabel)}
+            {editingId
+              ? updateLabel
+              : (copyFrom
+                  ? (selectedTemplate?.is_mine ? 'Create new session from my previous course' : `Create course from ${selectedTemplate?.faculty_name || 'faculty'}'s template`)
+                  : createLabel)}
           </button>
         </form>
       )}
